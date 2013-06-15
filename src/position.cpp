@@ -55,7 +55,7 @@ namespace Zobrist {
   Key exclusion;
 }
 
-Key mat_piece_key[2][8] = {
+Key mat_piece_key[COLOR_NB][PIECE_TYPE_NB] = {
   { 0ULL,
     0x5ced000000000001ULL,
     0xe173000000000010ULL,
@@ -822,28 +822,12 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
       byTypeBB[capture] ^= capsq;
       byColorBB[them] ^= capsq;
 
-      // Update piece list, move the last piece at index[capsq] position and
-      // shrink the list.
-      //
-      // WARNING: This is a not reversible operation. When we will reinsert the
-      // captured piece in undo_move() we will put it at the end of the list and
-      // not in its original place, it means index[] and pieceList[] are not
-      // guaranteed to be invariant to a do_move() + undo_move() sequence.
-/*
-      Square lastSquare = pieceList[them][capture][--pieceCount[them][capture]];
-      index[lastSquare] = index[capsq];
-      pieceList[them][capture][index[lastSquare]] = lastSquare;
-      pieceList[them][capture][pieceCount[them][capture]] = SQ_NONE;
-*/
+      // Update position hash key
+      k ^= Zobrist::psq[them][capture][capsq];
 
       // Update material hash key and prefetch access to materialTable
-      k ^= Zobrist::psq[them][capture][capsq];
-/*
-      st->materialKey ^= Zobrist::psq[them][capture][pieceCount[them][capture]];
-      prefetch((char*)thisThread->materialTable[st->materialKey]);
-*/
       st->materialKey -= mat_piece_key[them][capture];
-// FIXME      prefetch((char*)thisThread->materialTable[st->materialKey]);
+      prefetch((char*)thisThread->materialTable[st->materialKey]);
 
       // Update incremental scores
       st->psq -= psq[them][capture][capsq];
@@ -883,13 +867,6 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
 
       board[from] = NO_PIECE;
       board[to] = pc;
-
-      // Update piece lists, index[from] is not updated and becomes stale. This
-      // works as long as index[] is accessed just by known occupied squares.
-/*
-      index[to] = index[from];
-      pieceList[us][pt][index[to]] = to;
-*/
   }
 
   // If the moving piece is a pawn do some special extra work
@@ -915,24 +892,9 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
           byTypeBB[promotion] |= to;
           board[to] = make_piece(us, promotion);
 
-          // Update piece lists, move the last pawn at index[to] position
-          // and shrink the list. Add a new promotion piece to the list.
-/*
-          Square lastSquare = pieceList[us][PAWN][--pieceCount[us][PAWN]];
-          index[lastSquare] = index[to];
-          pieceList[us][PAWN][index[lastSquare]] = lastSquare;
-          pieceList[us][PAWN][pieceCount[us][PAWN]] = SQ_NONE;
-          index[to] = pieceCount[us][promotion];
-          pieceList[us][promotion][index[to]] = to;
-*/
-
           // Update hash keys
           k ^= Zobrist::psq[us][PAWN][to] ^ Zobrist::psq[us][promotion][to];
           st->pawnKey ^= Zobrist::psq[us][PAWN][to];
-/*
-          st->materialKey ^=  Zobrist::psq[us][promotion][pieceCount[us][promotion]++]
-                            ^ Zobrist::psq[us][PAWN][pieceCount[us][PAWN]];
-*/
           st->materialKey += mat_piece_key[us][promotion]
                            - mat_piece_key[us][PAWN];
 
@@ -1023,17 +985,6 @@ void Position::undo_move(Move m) {
       byTypeBB[PAWN] |= to;
       board[to] = make_piece(us, PAWN);
 
-      // Update piece lists, move the last promoted piece at index[to] position
-      // and shrink the list. Add a new pawn to the list.
-/*
-      Square lastSquare = pieceList[us][promotion][--pieceCount[us][promotion]];
-      index[lastSquare] = index[to];
-      pieceList[us][promotion][index[lastSquare]] = lastSquare;
-      pieceList[us][promotion][pieceCount[us][promotion]] = SQ_NONE;
-      index[to] = pieceCount[us][PAWN]++;
-      pieceList[us][PAWN][index[to]] = to;
-*/
-
       pt = PAWN;
   }
 
@@ -1057,13 +1008,6 @@ void Position::undo_move(Move m) {
 
       board[to] = NO_PIECE;
       board[from] = make_piece(us, pt);
-
-      // Update piece lists, index[to] is not updated and becomes stale. This
-      // works as long as index[] is accessed just by known occupied squares.
-/*
-      index[from] = index[to];
-      pieceList[us][pt][index[from]] = from;
-*/
   }
 
   if (capture)
@@ -1086,12 +1030,6 @@ void Position::undo_move(Move m) {
       byColorBB[them] |= capsq;
 
       board[capsq] = make_piece(them, capture);
-
-      // Update piece list, add a new captured piece in capsq square
-/*
-      index[capsq] = pieceCount[them][capture]++;
-      pieceList[them][capture][index[capsq]] = capsq;
-*/
   }
 
   // Finally point our state pointer back to the previous state
@@ -1119,15 +1057,6 @@ void Position::do_castle(Square kfrom, Square kto, Square rfrom, Square rto) {
   board[kfrom] = board[rfrom] = NO_PIECE;
   board[kto] = make_piece(us, KING);
   board[rto] = make_piece(us, ROOK);
-
-  // Could be kfrom == rto, so use a 'tmp' variable
-/*
-  int tmp = index[kfrom];
-  index[rto] = index[rfrom];
-  index[kto] = tmp;
-  pieceList[us][KING][index[kto]] = kto;
-  pieceList[us][ROOK][index[rto]] = rto;
-*/
 }
 
 
@@ -1291,12 +1220,6 @@ void Position::clear() {
   memset(this, 0, sizeof(Position));
   startState.epSquare = SQ_NONE;
   st = &startState;
-
-/*
-  for (int i = 0; i < 8; i++)
-      for (int j = 0; j < 16; j++)
-          pieceList[0][i][j] = pieceList[1][i][j] = SQ_NONE;
-*/
 }
 
 
@@ -1309,10 +1232,6 @@ void Position::put_piece(Piece p, Square s) {
   PieceType pt = type_of(p);
 
   board[s] = p;
-/*
-  index[s] = pieceCount[c][pt]++;
-  pieceList[c][pt][index[s]] = s;
-*/
 
   byTypeBB[ALL_PIECES] |= s;
   byTypeBB[pt] |= s;
@@ -1375,12 +1294,6 @@ Key Position::compute_material_key() const {
 
   Key k = 0;
 
-/*
-  for (Color c = WHITE; c <= BLACK; c++)
-      for (PieceType pt = PAWN; pt <= QUEEN; pt++)
-          for (int cnt = 0; cnt < piece_count(c, pt); cnt++)
-              k ^= Zobrist::psq[c][pt][cnt];
-*/
   for (Color c = WHITE; c <= BLACK; c++)
       for (PieceType pt = PAWN; pt <= QUEEN; pt++)
           k += mat_piece_key[c][pt] * piece_count(c, pt);
@@ -1523,8 +1436,6 @@ bool Position::pos_is_ok(int* failedStep) const {
   const bool debugPawnKey         = all || false;
   const bool debugIncrementalEval = all || false;
   const bool debugNonPawnMaterial = all || false;
-//  const bool debugPieceCounts     = all || false;
-//  const bool debugPieceList       = all || false;
   const bool debugCastleSquares   = all || false;
 
   *step = 1;
@@ -1596,26 +1507,6 @@ bool Position::pos_is_ok(int* failedStep) const {
           || st->npMaterial[BLACK] != compute_non_pawn_material(BLACK))
           return false;
   }
-
-/*
-  if ((*step)++, debugPieceCounts)
-      for (Color c = WHITE; c <= BLACK; c++)
-          for (PieceType pt = PAWN; pt <= KING; pt++)
-              if (pieceCount[c][pt] != popcount<Full>(pieces(c, pt)))
-                  return false;
-
-  if ((*step)++, debugPieceList)
-      for (Color c = WHITE; c <= BLACK; c++)
-          for (PieceType pt = PAWN; pt <= KING; pt++)
-              for (int i = 0; i < pieceCount[c][pt]; i++)
-              {
-                  if (piece_on(piece_list(c, pt)[i]) != make_piece(c, pt))
-                      return false;
-
-                  if (index[piece_list(c, pt)[i]] != i)
-                      return false;
-              }
-*/
 
   if ((*step)++, debugCastleSquares)
       for (Color c = WHITE; c <= BLACK; c++)

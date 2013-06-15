@@ -223,10 +223,8 @@ namespace {
 
     assert(Pt != KING && Pt != PAWN);
 
-//    const Square* pl = pos.piece_list(us, Pt);
     Bitboard bb = pos.pieces(us, Pt);
 
-//    for (Square from = *pl; from != SQ_NONE; from = *++pl)
     while (bb)
     {
         Square from = pop_lsb(&bb);
