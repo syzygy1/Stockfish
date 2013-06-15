@@ -27,9 +27,7 @@
 
 #include "tbcore.cpp"
 
-namespace Zobrist {
-  extern Key psq[COLOR_NB][PIECE_TYPE_NB][SQUARE_NB];
-}
+extern Key MaterialPieceKey[COLOR_NB][PIECE_TYPE_NB];
 
 static RKISS rk;
 
@@ -65,12 +63,10 @@ static uint64 calc_key(Position& pos, int mirror)
 
   color = !mirror ? WHITE : BLACK;
   for (pt = PAWN; pt <= QUEEN; pt++)
-    for (i = 0; i < pos.piece_count(color, pt); i++)
-      key ^= Zobrist::psq[WHITE][pt][i];
+    key += MaterialPieceKey[WHITE][pt] * pos.piece_count(color, pt);
   color = ~color;
   for (pt = PAWN; pt <= QUEEN; pt++)
-    for (i = 0; i < pos.piece_count(color, pt); i++)
-      key ^= Zobrist::psq[BLACK][pt][i];
+    key += MaterialPieceKey[BLACK][pt] * pos.piece_count(color, pt);
 
   return key;
 }
@@ -88,12 +84,10 @@ static uint64 calc_key_from_pcs(int *pcs, int mirror)
 
   color = !mirror ? 0 : 8;
   for (pt = PAWN; pt <= QUEEN; pt++)
-    for (i = 0; i < pcs[color + pt]; i++)
-      key ^= Zobrist::psq[WHITE][pt][i];
+    key += MaterialPieceKey[WHITE][pt] * pcs[color + pt];
   color ^= 8;
   for (pt = PAWN; pt <= QUEEN; pt++)
-    for (i = 0; i < pcs[color + pt]; i++)
-      key ^= Zobrist::psq[BLACK][pt][i];
+    key += MaterialPieceKey[BLACK][pt] * pcs[color + pt];
 
   return key;
 }
