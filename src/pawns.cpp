@@ -91,11 +91,15 @@ namespace {
     Rank r;
     bool passed, isolated, doubled, opposed, chain, backward, candidate;
     Score value = SCORE_ZERO;
-    const Square* pl = pos.piece_list(Us, PAWN);
+//    const Square* pl = pos.piece_list(Us, PAWN);
+    Bitboard bb = pos.pieces(Us, PAWN);
 
     // Loop through all pawns of the current color and score each pawn
-    while ((s = *pl++) != SQ_NONE)
+//    while ((s = *pl++) != SQ_NONE)
+    while (bb)
     {
+        s = pop_lsb(&bb);
+
         assert(pos.piece_on(s) == make_piece(Us, PAWN));
 
         f = file_of(s);

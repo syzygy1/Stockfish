@@ -50,10 +50,13 @@ namespace Time {
 }
 
 
-template<class Entry, int Size>
+template<class Entry, int Size, bool low>
 struct HashTable {
-  HashTable() : e(Size, Entry()) {}
-  Entry* operator[](Key k) { return &e[(uint32_t)k & (Size - 1)]; }
+  HashTable() : e((1 << Size), Entry()) {}
+  Entry* operator[](Key k) {
+    return low ? &e[(uint32_t)k & ((1 << Size) - 1)]
+               : &e[(uint64_t)k >> (64 - Size)];
+  }
 
 private:
   std::vector<Entry> e;

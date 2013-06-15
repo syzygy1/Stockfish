@@ -69,7 +69,7 @@ struct Entry {
   int pawnsOnSquares[COLOR_NB][COLOR_NB];
 };
 
-typedef HashTable<Entry, 16384> Table;
+typedef HashTable<Entry, 14, true> Table;
 
 Entry* probe(const Position& pos, Table& entries);
 

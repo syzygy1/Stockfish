@@ -25,7 +25,7 @@
 
 #include "bitboard.h"
 #include "types.h"
-
+#include "bitcount.h"
 
 /// The checkInfo struct is initialized at c'tor time and keeps info used
 /// to detect if a move gives check.
@@ -113,7 +113,7 @@ public:
   Square king_square(Color c) const;
   Square ep_square() const;
   bool is_empty(Square s) const;
-  const Square* piece_list(Color c, PieceType pt) const;
+//  const Square* piece_list(Color c, PieceType pt) const;
   int piece_count(Color c, PieceType pt) const;
 
   // Castling
@@ -208,9 +208,9 @@ private:
   Piece board[SQUARE_NB];
   Bitboard byTypeBB[PIECE_TYPE_NB];
   Bitboard byColorBB[COLOR_NB];
-  int pieceCount[COLOR_NB][PIECE_TYPE_NB];
-  Square pieceList[COLOR_NB][PIECE_TYPE_NB][16];
-  int index[SQUARE_NB];
+//  int pieceCount[COLOR_NB][PIECE_TYPE_NB];
+//  Square pieceList[COLOR_NB][PIECE_TYPE_NB][16];
+//  int index[SQUARE_NB];
 
   // Other info
   int castleRightsMask[SQUARE_NB];
@@ -274,19 +274,23 @@ inline Bitboard Position::pieces(Color c, PieceType pt1, PieceType pt2) const {
 }
 
 inline int Position::piece_count(Color c, PieceType pt) const {
-  return pieceCount[c][pt];
+//  return pieceCount[c][pt];
+  return popcount<Full>(pieces(c, pt));
 }
 
+/*
 inline const Square* Position::piece_list(Color c, PieceType pt) const {
   return pieceList[c][pt];
 }
+*/
 
 inline Square Position::ep_square() const {
   return st->epSquare;
 }
 
 inline Square Position::king_square(Color c) const {
-  return pieceList[c][KING][0];
+//  return pieceList[c][KING][0];
+  return lsb(pieces(c, KING));
 }
 
 inline int Position::can_castle(CastleRight f) const {
@@ -374,15 +378,26 @@ inline int Position::game_ply() const {
 
 inline bool Position::opposite_bishops() const {
 
+  Bitboard wb = pieces(WHITE, BISHOP);
+  Bitboard bb = pieces(BLACK, BISHOP);
+  Square wsq = pop_lsb(&wb);
+  Square bsq = pop_lsb(&bb);
+  return !wb && !bb && opposite_colors(wsq, bsq);
+/*
   return   pieceCount[WHITE][BISHOP] == 1
         && pieceCount[BLACK][BISHOP] == 1
         && opposite_colors(pieceList[WHITE][BISHOP][0], pieceList[BLACK][BISHOP][0]);
+*/
 }
 
 inline bool Position::bishop_pair(Color c) const {
 
+  Bitboard bb = pieces(c, BISHOP);
+  return more_than_one(bb) && !(bb && BlackSquares) && !(bb & ~BlackSquares);
+/*
   return   pieceCount[c][BISHOP] >= 2
         && opposite_colors(pieceList[c][BISHOP][0], pieceList[c][BISHOP][1]);
+*/
 }
 
 inline bool Position::pawn_on_7th(Color c) const {

@@ -487,12 +487,16 @@ Value do_evaluate(const Position& pos, Value& margin) {
     Score score = SCORE_ZERO;
 
     const Color Them = (Us == WHITE ? BLACK : WHITE);
-    const Square* pl = pos.piece_list(Us, Piece);
+//    const Square* pl = pos.piece_list(Us, Piece);
+    Bitboard piece_bb = pos.pieces(Us, Piece);
 
     ei.attackedBy[Us][Piece] = 0;
 
-    while ((s = *pl++) != SQ_NONE)
+//    while ((s = *pl++) != SQ_NONE)
+    while (piece_bb)
     {
+        s = pop_lsb(&piece_bb);
+
         // Find attacked squares, including x-ray attacks for bishops and rooks
         b = Piece == BISHOP ? attacks_bb<BISHOP>(s, pos.pieces() ^ pos.pieces(Us, QUEEN))
           : Piece ==   ROOK ? attacks_bb<  ROOK>(s, pos.pieces() ^ pos.pieces(Us, ROOK, QUEEN))
