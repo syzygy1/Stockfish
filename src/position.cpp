@@ -55,7 +55,7 @@ namespace Zobrist {
   Key exclusion;
 }
 
-Key mat_piece_key[COLOR_NB][PIECE_TYPE_NB] = {
+Key MaterialPieceKey[COLOR_NB][PIECE_TYPE_NB] = {
   { 0ULL,
     0x5ced000000000001ULL,
     0xe173000000000010ULL,
@@ -826,7 +826,7 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
       k ^= Zobrist::psq[them][capture][capsq];
 
       // Update material hash key and prefetch access to materialTable
-      st->materialKey -= mat_piece_key[them][capture];
+      st->materialKey -= MaterialPieceKey[them][capture];
       prefetch((char*)thisThread->materialTable[st->materialKey]);
 
       // Update incremental scores
@@ -895,8 +895,8 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
           // Update hash keys
           k ^= Zobrist::psq[us][PAWN][to] ^ Zobrist::psq[us][promotion][to];
           st->pawnKey ^= Zobrist::psq[us][PAWN][to];
-          st->materialKey += mat_piece_key[us][promotion]
-                           - mat_piece_key[us][PAWN];
+          st->materialKey += MaterialPieceKey[us][promotion]
+                           - MaterialPieceKey[us][PAWN];
 
           // Update incremental score
           st->psq += psq[us][promotion][to] - psq[us][PAWN][to];
@@ -1296,7 +1296,7 @@ Key Position::compute_material_key() const {
 
   for (Color c = WHITE; c <= BLACK; c++)
       for (PieceType pt = PAWN; pt <= QUEEN; pt++)
-          k += mat_piece_key[c][pt] * piece_count(c, pt);
+          k += MaterialPieceKey[c][pt] * piece_count(c, pt);
 
   return k;
 }
