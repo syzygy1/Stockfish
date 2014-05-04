@@ -1179,7 +1179,8 @@ moves_loop: // When in check and at SpNode search starts from here
     // Check for an instant draw or if the maximum ply has been reached
     if (pos.is_draw() || ss->ply > MAX_PLY)
     {
-        if (pos.total_piece_count() <= TBCardinality)
+        if (pos.total_piece_count() <= TBCardinality
+        && ((ss-1)->currentMove != MOVE_NULL && (ss-1)->currentMove != MOVE_NONE))
         {
             int found, v = Tablebases::probe_wdl(const_cast<Position&>(pos), &found);
             Value value;
@@ -1223,7 +1224,8 @@ moves_loop: // When in check and at SpNode search starts from here
         return ttValue;
     }
 
-    if (pos.total_piece_count() <= TBCardinality)
+    if (pos.total_piece_count() <= TBCardinality
+        && ((ss-1)->currentMove != MOVE_NULL && (ss-1)->currentMove != MOVE_NONE))
     {
         int found, v = Tablebases::probe_wdl(const_cast<Position&>(pos), &found);
         Value value;
