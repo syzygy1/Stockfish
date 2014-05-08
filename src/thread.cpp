@@ -194,7 +194,8 @@ void ThreadPool::init() {
 }
 
 
-// exit() cleanly terminates the threads before the program exits
+// exit() cleanly terminates the threads before the program exits. Cannot be done in
+// d'tor because we have to terminate the threads before to free ThreadPool object.
 
 void ThreadPool::exit() {
 
@@ -292,6 +293,7 @@ void Thread::split(Position& pos, const Stack* ss, Value alpha, Value beta, Valu
   Threads.mutex.lock();
   sp.mutex.lock();
 
+  sp.allSlavesSearching = true; // Must be set under lock protection
   ++splitPointsSize;
   activeSplitPoint = &sp;
   activePosition = NULL;

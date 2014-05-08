@@ -45,7 +45,6 @@ namespace Search {
   Color RootColor;
   Time::point SearchTime;
   StateStackPtr SetupStates;
-  Value Contempt[2]; // [bestValue > VALUE_DRAW]
 }
 
 using std::string;
@@ -58,7 +57,7 @@ namespace {
   const bool FakeSplit = false;
 
   // Different node types, used as template parameter
-  enum NodeType { Root, PV, NonPV, SplitPointRoot, SplitPointPV, SplitPointNonPV };
+  enum NodeType { Root, PV, NonPV };
 
   // Dynamic razoring margin based on depth
   inline Value razor_margin(Depth d) { return Value(512 + 16 * d); }
@@ -86,7 +85,7 @@ namespace {
   GainsStats Gains;
   MovesStats Countermoves, Followupmoves;
 
-  template <NodeType NT>
+  template <NodeType NT, bool SpNode>
   Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode);
 
   template <NodeType NT, bool InCheck>
@@ -95,7 +94,7 @@ namespace {
   void id_loop(Position& pos);
   Value value_to_tt(Value v, int ply);
   Value value_from_tt(Value v, int ply);
-  void update_stats(Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt);
+  void update_stats(const Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt);
   string uci_pv(const Position& pos, int depth, Value alpha, Value beta);
 
   struct Skill {
@@ -186,9 +185,9 @@ void Search::think() {
   RootColor = RootPos.side_to_move();
   TimeMgr.init(Limits, RootPos.game_ply(), RootColor);
 
-  DrawValue[0] = DrawValue[1] = VALUE_DRAW;
-  Contempt[0] =  Options["Contempt Factor"] * PawnValueEg / 100; // From centipawns
-  Contempt[1] = (Options["Contempt Factor"] + 12) * PawnValueEg / 100;
+  int cf = Options["Contempt Factor"] * PawnValueEg / 100; // From centipawns
+  DrawValue[ RootColor] = VALUE_DRAW - Value(cf);
+  DrawValue[~RootColor] = VALUE_DRAW + Value(cf);
 
   if (RootMoves.empty())
   {
@@ -338,10 +337,7 @@ namespace {
             // high/low anymore.
             while (true)
             {
-                bestValue = search<Root>(pos, ss, alpha, beta, depth * ONE_PLY, false);
-
-                DrawValue[ RootColor] = VALUE_DRAW - Contempt[bestValue > VALUE_DRAW];
-                DrawValue[~RootColor] = VALUE_DRAW + Contempt[bestValue > VALUE_DRAW];
+                bestValue = search<Root, false>(pos, ss, alpha, beta, depth * ONE_PLY, false);
 
                 // Bring the best move to the front. It is critical that sorting
                 // is done with a stable algorithm because all the values but the
@@ -447,12 +443,11 @@ namespace {
   // repeat all this work again. We also don't need to store anything to the hash
   // table here: This is taken care of after we return from the split point.
 
-  template <NodeType NT>
+  template <NodeType NT, bool SpNode>
   Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode) {
 
-    const bool PvNode   = (NT == PV || NT == Root || NT == SplitPointPV || NT == SplitPointRoot);
-    const bool SpNode   = (NT == SplitPointPV || NT == SplitPointNonPV || NT == SplitPointRoot);
-    const bool RootNode = (NT == Root || NT == SplitPointRoot);
+    const bool RootNode = NT == Root;
+    const bool PvNode   = NT == PV || NT == Root;
 
     assert(-VALUE_INFINITE <= alpha && alpha < beta && beta <= VALUE_INFINITE);
     assert(PvNode || (alpha == beta - 1));
@@ -625,7 +620,7 @@ namespace {
         pos.do_null_move(st);
         (ss+1)->skipNullMove = true;
         nullValue = depth-R < ONE_PLY ? -qsearch<NonPV, false>(pos, ss+1, -beta, -beta+1, DEPTH_ZERO)
-                                      : - search<NonPV>(pos, ss+1, -beta, -beta+1, depth-R, !cutNode);
+                                      : - search<NonPV, false>(pos, ss+1, -beta, -beta+1, depth-R, !cutNode);
         (ss+1)->skipNullMove = false;
         pos.undo_null_move();
 
@@ -641,7 +636,7 @@ namespace {
             // Do verification search at high depths
             ss->skipNullMove = true;
             Value v = depth-R < ONE_PLY ? qsearch<NonPV, false>(pos, ss, beta-1, beta, DEPTH_ZERO)
-                                        :  search<NonPV>(pos, ss, beta-1, beta, depth-R, false);
+                                        :  search<NonPV, false>(pos, ss, beta-1, beta, depth-R, false);
             ss->skipNullMove = false;
 
             if (v >= beta)
@@ -674,7 +669,7 @@ namespace {
 
                 ss->currentMove = move;
                 pos.do_move(move, st, pos.gives_check(move));
-                value = -search<NonPV>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
+                value = -search<NonPV, false>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
                 pos.undo_move(move);
                 if (value >= rbeta)
                     return value;
@@ -689,7 +684,7 @@ namespace {
         Depth d = depth - 2 * ONE_PLY - (PvNode ? DEPTH_ZERO : depth / 4);
 
         ss->skipNullMove = true;
-        search<PvNode ? PV : NonPV>(pos, ss, alpha, beta, d, true);
+        search<PvNode ? PV : NonPV, false>(pos, ss, alpha, beta, d, true);
         ss->skipNullMove = false;
 
         tte = TT.probe(posKey);
@@ -786,7 +781,7 @@ moves_loop: // When in check and at SpNode search starts from here
           Value rBeta = ttValue - int(depth);
           ss->excludedMove = move;
           ss->skipNullMove = true;
-          value = search<NonPV>(pos, ss, rBeta - 1, rBeta, depth / 2, cutNode);
+          value = search<NonPV, false>(pos, ss, rBeta - 1, rBeta, depth / 2, cutNode);
           ss->skipNullMove = false;
           ss->excludedMove = MOVE_NONE;
 
@@ -879,13 +874,13 @@ moves_loop: // When in check and at SpNode search starts from here
           if (SpNode)
               alpha = splitPoint->alpha;
 
-          value = -search<NonPV>(pos, ss+1, -(alpha+1), -alpha, d, true);
+          value = -search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, d, true);
 
           // Research at intermediate depth if reduction is very high
           if (value > alpha && ss->reduction >= 4 * ONE_PLY)
           {
               Depth d2 = std::max(newDepth - 2 * ONE_PLY, ONE_PLY);
-              value = -search<NonPV>(pos, ss+1, -(alpha+1), -alpha, d2, true);
+              value = -search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, d2, true);
           }
 
           doFullDepthSearch = (value > alpha && ss->reduction != DEPTH_ZERO);
@@ -903,7 +898,7 @@ moves_loop: // When in check and at SpNode search starts from here
           value = newDepth < ONE_PLY ?
                           givesCheck ? -qsearch<NonPV,  true>(pos, ss+1, -(alpha+1), -alpha, DEPTH_ZERO)
                                      : -qsearch<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, DEPTH_ZERO)
-                                     : - search<NonPV>(pos, ss+1, -(alpha+1), -alpha, newDepth, !cutNode);
+                                     : - search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, newDepth, !cutNode);
       }
 
       // For PV nodes only, do a full PV search on the first move or after a fail
@@ -913,7 +908,7 @@ moves_loop: // When in check and at SpNode search starts from here
           value = newDepth < ONE_PLY ?
                           givesCheck ? -qsearch<PV,  true>(pos, ss+1, -beta, -alpha, DEPTH_ZERO)
                                      : -qsearch<PV, false>(pos, ss+1, -beta, -alpha, DEPTH_ZERO)
-                                     : - search<PV>(pos, ss+1, -beta, -alpha, newDepth, false);
+                                     : - search<PV, false>(pos, ss+1, -beta, -alpha, newDepth, false);
       // Step 17. Undo move
       pos.undo_move(move);
 
@@ -980,8 +975,10 @@ moves_loop: // When in check and at SpNode search starts from here
 
       // Step 19. Check for splitting the search
       if (   !SpNode
+          &&  Threads.size() >= 2
           &&  depth >= Threads.minimumSplitDepth
-          &&  Threads.available_slave(thisThread)
+          &&  (   !thisThread->activeSplitPoint
+               || !thisThread->activeSplitPoint->allSlavesSearching)
           &&  thisThread->splitPointsSize < MAX_SPLITPOINTS_PER_THREAD)
       {
           assert(bestValue > -VALUE_INFINITE && bestValue < beta);
@@ -1038,7 +1035,7 @@ moves_loop: // When in check and at SpNode search starts from here
   template <NodeType NT, bool InCheck>
   Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth) {
 
-    const bool PvNode = (NT == PV);
+    const bool PvNode = NT == PV;
 
     assert(NT == PV || NT == NonPV);
     assert(InCheck == !!pos.checkers());
@@ -1259,7 +1256,7 @@ moves_loop: // When in check and at SpNode search starts from here
   // update_stats() updates killers, history, countermoves and followupmoves stats after a fail-high
   // of a quiet move.
 
-  void update_stats(Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt) {
+  void update_stats(const Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt) {
 
     if (ss->killers[0] != move)
     {
@@ -1511,25 +1508,24 @@ void Thread::idle_loop() {
 
           activePosition = &pos;
 
-          switch (sp->nodeType) {
-          case Root:
-              search<SplitPointRoot>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-              break;
-          case PV:
-              search<SplitPointPV>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-              break;
-          case NonPV:
-              search<SplitPointNonPV>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-              break;
-          default:
+          if (sp->nodeType == NonPV)
+              search<NonPV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+
+          else if (sp->nodeType == PV)
+              search<PV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+
+          else if (sp->nodeType == Root)
+              search<Root, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+
+          else
               assert(false);
-          }
 
           assert(searching);
 
           searching = false;
           activePosition = NULL;
           sp->slavesMask.reset(idx);
+          sp->allSlavesSearching = false;
           sp->nodes += pos.nodes_searched();
 
           // Wake up the master thread so to allow it to return from the idle
@@ -1544,9 +1540,39 @@ void Thread::idle_loop() {
 
           // After releasing the lock we can't access any SplitPoint related data
           // in a safe way because it could have been released under our feet by
-          // the sp master. Also accessing other Thread objects is unsafe because
-          // if we are exiting there is a chance that they are already freed.
+          // the sp master.
           sp->mutex.unlock();
+
+          // Try to late join to another split point if none of its slaves has
+          // already finished.
+          if (Threads.size() > 2)
+              for (size_t i = 0; i < Threads.size(); ++i)
+              {
+                  int size = Threads[i]->splitPointsSize; // Local copy
+                  sp = size ? &Threads[i]->splitPoints[size - 1] : NULL;
+
+                  if (   sp
+                      && sp->allSlavesSearching
+                      && available_to(Threads[i]))
+                  {
+                      // Recheck the conditions under lock protection
+                      Threads.mutex.lock();
+                      sp->mutex.lock();
+
+                      if (   sp->allSlavesSearching
+                          && available_to(Threads[i]))
+                      {
+                           sp->slavesMask.set(idx);
+                           activeSplitPoint = sp;
+                           searching = true;
+                      }
+
+                      sp->mutex.unlock();
+                      Threads.mutex.unlock();
+
+                      break; // Just a single attempt
+                  }
+              }
       }
 
       // If this thread is the master of a split point and all slaves have finished
