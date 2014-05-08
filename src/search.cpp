@@ -159,12 +159,12 @@ static uint64_t perft(Position& pos, Depth depth) {
 
   StateInfo st;
   uint64_t cnt = 0;
-  CheckInfo ci(pos);
   const bool leaf = depth == 2 * ONE_PLY;
 
   for (MoveList<LEGAL> it(pos); *it; ++it)
   {
-      pos.do_move(*it, st, ci, pos.gives_check(*it, ci));
+      pos.do_move(*it, st);
+      pos.init_check_info();
       cnt += leaf ? MoveList<LEGAL>(pos).size() : ::perft(pos, depth - ONE_PLY);
       pos.undo_move(*it);
   }
@@ -665,14 +665,15 @@ namespace {
         assert((ss-1)->currentMove != MOVE_NONE);
         assert((ss-1)->currentMove != MOVE_NULL);
 
+        pos.init_check_info();
         MovePicker mp(pos, ttMove, History, pos.captured_piece_type());
-        CheckInfo ci(pos);
 
         while ((move = mp.next_move<false>()) != MOVE_NONE)
-            if (pos.legal(move, ci.pinned))
             {
+                assert(pos.legal(move));
+
                 ss->currentMove = move;
-                pos.do_move(move, st, ci, pos.gives_check(move, ci));
+                pos.do_move(move, st, pos.gives_check(move));
                 value = -search<NonPV>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
                 pos.undo_move(move);
                 if (value >= rbeta)
@@ -705,8 +706,9 @@ moves_loop: // When in check and at SpNode search starts from here
     Move followupmoves[] = { Followupmoves[pos.piece_on(prevOwnMoveSq)][prevOwnMoveSq].first,
                              Followupmoves[pos.piece_on(prevOwnMoveSq)][prevOwnMoveSq].second };
 
+    pos.init_check_info();
     MovePicker mp(pos, ttMove, depth, History, countermoves, followupmoves, ss);
-    CheckInfo ci(pos);
+    CheckInfo *ci = pos.check_info();
     value = bestValue; // Workaround a bogus 'uninitialized' warning under gcc
     improving =   ss->staticEval >= (ss-2)->staticEval
                || ss->staticEval == VALUE_NONE
@@ -721,26 +723,23 @@ moves_loop: // When in check and at SpNode search starts from here
                            &&  tte->depth() >= depth - 3 * ONE_PLY;
 
     // Step 11. Loop through moves
-    // Loop through all pseudo-legal moves until no moves remain or a beta cutoff occurs
+    // Loop through all legal moves until no moves remain or a beta cutoff occurs
     while ((move = mp.next_move<SpNode>()) != MOVE_NONE)
     {
       assert(is_ok(move));
+      assert(pos.legal(move));
 
       if (move == excludedMove)
           continue;
 
       // At root obey the "searchmoves" option and skip moves not listed in Root
-      // Move List. As a consequence any illegal move is also skipped. In MultiPV
-      // mode we also skip PV moves which have been already searched.
+      // Move List. As a consequence, in MultiPV mode we skip PV moves which
+      // have been already searched.
       if (RootNode && !std::count(RootMoves.begin() + PVIdx, RootMoves.end(), move))
           continue;
 
       if (SpNode)
       {
-          // Shared counter cannot be decremented later if the move turns out to be illegal
-          if (!pos.legal(move, ci.pinned))
-              continue;
-
           moveCount = ++splitPoint->moveCount;
           splitPoint->mutex.unlock();
       }
@@ -760,9 +759,9 @@ moves_loop: // When in check and at SpNode search starts from here
       ext = DEPTH_ZERO;
       captureOrPromotion = pos.capture_or_promotion(move);
 
-      givesCheck =  type_of(move) == NORMAL && !ci.dcCandidates
-                  ? ci.checkSq[type_of(pos.piece_on(from_sq(move)))] & to_sq(move)
-                  : pos.gives_check(move, ci);
+      givesCheck =  type_of(move) == NORMAL && !ci->dcCandidates
+                  ? ci->checkSq[type_of(pos.piece_on(from_sq(move)))] & to_sq(move)
+                  : pos.gives_check(move);
 
       dangerous =   givesCheck
                  || type_of(move) != NORMAL
@@ -780,7 +779,6 @@ moves_loop: // When in check and at SpNode search starts from here
       if (    singularExtensionNode
           &&  move == ttMove
           && !ext
-          &&  pos.legal(move, ci.pinned)
           &&  abs(ttValue) < VALUE_KNOWN_WIN)
       {
           assert(ttValue != VALUE_NONE);
@@ -849,20 +847,13 @@ moves_loop: // When in check and at SpNode search starts from here
           }
       }
 
-      // Check for legality just before making the move
-      if (!RootNode && !SpNode && !pos.legal(move, ci.pinned))
-      {
-          moveCount--;
-          continue;
-      }
-
       pvMove = PvNode && moveCount == 1;
       ss->currentMove = move;
       if (!SpNode && !captureOrPromotion && quietCount < 64)
           quietsSearched[quietCount++] = move;
 
       // Step 14. Make the move
-      pos.do_move(move, st, ci, givesCheck);
+      pos.do_move(move, st, givesCheck);
 
       // Step 15. Reduced depth search (LMR). If the move fails high it will be
       // re-searched at full depth.
@@ -1139,17 +1130,19 @@ moves_loop: // When in check and at SpNode search starts from here
     // to search the moves. Because the depth is <= 0 here, only captures,
     // queen promotions and checks (only if depth >= DEPTH_QS_CHECKS) will
     // be generated.
+    pos.init_check_info();
     MovePicker mp(pos, ttMove, depth, History, to_sq((ss-1)->currentMove));
-    CheckInfo ci(pos);
+    CheckInfo *ci = pos.check_info();
 
     // Loop through the moves until no moves remain or a beta cutoff occurs
     while ((move = mp.next_move<false>()) != MOVE_NONE)
     {
       assert(is_ok(move));
+      assert(pos.legal(move));
 
-      givesCheck =  type_of(move) == NORMAL && !ci.dcCandidates
-                  ? ci.checkSq[type_of(pos.piece_on(from_sq(move)))] & to_sq(move)
-                  : pos.gives_check(move, ci);
+      givesCheck =  type_of(move) == NORMAL && !ci->dcCandidates
+                  ? ci->checkSq[type_of(pos.piece_on(from_sq(move)))] & to_sq(move)
+                  : pos.gives_check(move);
 
       // Futility pruning
       if (   !PvNode
@@ -1190,14 +1183,10 @@ moves_loop: // When in check and at SpNode search starts from here
           &&  pos.see_sign(move) < VALUE_ZERO)
           continue;
 
-      // Check for legality just before making the move
-      if (!pos.legal(move, ci.pinned))
-          continue;
-
       ss->currentMove = move;
 
       // Make and search the move
-      pos.do_move(move, st, ci, givesCheck);
+      pos.do_move(move, st, givesCheck);
       value = givesCheck ? -qsearch<NT,  true>(pos, ss+1, -beta, -alpha, depth - ONE_PLY)
                          : -qsearch<NT, false>(pos, ss+1, -beta, -alpha, depth - ONE_PLY);
       pos.undo_move(move);
@@ -1404,6 +1393,7 @@ void RootMove::extract_pv_from_tt(Position& pos) {
   Move m = pv[0];
 
   pv.clear();
+  pos.init_check_info();
 
   do {
       pv.push_back(m);
@@ -1411,11 +1401,12 @@ void RootMove::extract_pv_from_tt(Position& pos) {
       assert(MoveList<LEGAL>(pos).contains(pv[ply]));
 
       pos.do_move(pv[ply++], *st++);
+      pos.init_check_info();
       tte = TT.probe(pos.key());
 
   } while (   tte
            && pos.pseudo_legal(m = tte->move()) // Local copy, TT could change
-           && pos.legal(m, pos.pinned_pieces(pos.side_to_move()))
+           && pos.legal(m)
            && ply < MAX_PLY
            && (!pos.is_draw() || ply < 2));
 
@@ -1440,6 +1431,8 @@ void RootMove::insert_pv_in_tt(Position& pos) {
 
       if (!tte || tte->move() != pv[ply]) // Don't overwrite correct entries
           TT.store(pos.key(), VALUE_NONE, BOUND_NONE, DEPTH_NONE, pv[ply], VALUE_NONE);
+
+      pos.init_check_info();
 
       assert(MoveList<LEGAL>(pos).contains(pv[ply]));
 

@@ -108,6 +108,8 @@ const string move_to_san(Position& pos, Move m) {
   if (m == MOVE_NULL)
       return "(null)";
 
+  pos.init_check_info();
+
   assert(MoveList<LEGAL>(pos).contains(m));
 
   Bitboard others, b;
@@ -133,7 +135,7 @@ const string move_to_san(Position& pos, Move m) {
           while (b)
           {
               Square s = pop_lsb(&b);
-              if (!pos.legal(make_move(s, to), pos.pinned_pieces(us)))
+              if (!pos.legal(make_move(s, to)))
                   others ^= s;
           }
 
@@ -161,10 +163,11 @@ const string move_to_san(Position& pos, Move m) {
           san += string("=") + PieceToChar[WHITE][promotion_type(m)];
   }
 
-  if (pos.gives_check(m, CheckInfo(pos)))
+  if (pos.gives_check(m))
   {
       StateInfo st;
       pos.do_move(m, st);
+      pos.init_check_info();
       san += MoveList<LEGAL>(pos).size() ? "+" : "#";
       pos.undo_move(m);
   }

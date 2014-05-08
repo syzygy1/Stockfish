@@ -89,6 +89,7 @@ PieceType min_attacker<KING>(const Bitboard*, const Square&, const Bitboard&, Bi
 } // namespace
 
 
+#if 0
 /// CheckInfo c'tor
 
 CheckInfo::CheckInfo(const Position& pos) {
@@ -105,6 +106,23 @@ CheckInfo::CheckInfo(const Position& pos) {
   checkSq[ROOK]   = pos.attacks_from<ROOK>(ksq);
   checkSq[QUEEN]  = checkSq[BISHOP] | checkSq[ROOK];
   checkSq[KING]   = 0;
+}
+#endif
+
+void Position::init_check_info() {
+
+  Color them = ~side_to_move();
+  Square ksq = st->ci.ksq = king_square(them);
+
+  st->ci.pinned = pinned_pieces(side_to_move());
+  st->ci.dcCandidates = discovered_check_candidates();
+
+  st->ci.checkSq[PAWN]   = attacks_from<PAWN>(ksq, them);
+  st->ci.checkSq[KNIGHT] = attacks_from<KNIGHT>(ksq);
+  st->ci.checkSq[BISHOP] = attacks_from<BISHOP>(ksq);
+  st->ci.checkSq[ROOK]   = attacks_from<ROOK>(ksq);
+  st->ci.checkSq[QUEEN]  = st->ci.checkSq[BISHOP] | st->ci.checkSq[ROOK];
+  st->ci.checkSq[KING]   = 0;
 }
 
 
@@ -302,6 +320,7 @@ void Position::set(const string& fenStr, bool isChess960, Thread* th) {
   chess960 = isChess960;
   thisThread = th;
   set_state(st);
+  init_check_info();
 
   assert(pos_is_ok());
 }
@@ -508,7 +527,9 @@ Bitboard Position::attackers_to(Square s, Bitboard occ) const {
 
 /// Position::legal() tests whether a pseudo-legal move is legal
 
-bool Position::legal(Move m, Bitboard pinned) const {
+bool Position::legal(Move m) const {
+
+  Bitboard pinned = check_info()->pinned;
 
   assert(is_ok(m));
   assert(pinned == pinned_pieces(sideToMove));
@@ -628,11 +649,14 @@ bool Position::pseudo_legal(const Move m) const {
 
 /// Position::gives_check() tests whether a pseudo-legal move gives a check
 
-bool Position::gives_check(Move m, const CheckInfo& ci) const {
+bool Position::gives_check(Move m) const {
+
+  CheckInfo& ci = st->ci;
 
   assert(is_ok(m));
   assert(ci.dcCandidates == discovered_check_candidates());
   assert(color_of(moved_piece(m)) == sideToMove);
+  assert(ci.pinned != ~0ULL);
 
   Square from = from_sq(m);
   Square to = to_sq(m);
@@ -691,14 +715,16 @@ bool Position::gives_check(Move m, const CheckInfo& ci) const {
 
 void Position::do_move(Move m, StateInfo& newSt) {
 
-  CheckInfo ci(*this);
-  do_move(m, newSt, ci, gives_check(m, ci));
+  do_move(m, newSt, gives_check(m));
 }
 
-void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveIsCheck) {
+void Position::do_move(Move m, StateInfo& newSt, bool moveIsCheck) {
+
+  CheckInfo& ci = st->ci;
 
   assert(is_ok(m));
   assert(&newSt != st);
+  assert(ci.pinned != ~0ULL);
 
   ++nodes;
   Key k = st->key;
@@ -710,6 +736,9 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
 
   newSt.previous = st;
   st = &newSt;
+#ifndef NDEBUG
+  st->ci.pinned = ~0ULL;
+#endif
 
   // Update side to move
   k ^= Zobrist::side;

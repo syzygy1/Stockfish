@@ -34,7 +34,7 @@ struct Thread;
 
 struct CheckInfo {
 
-  explicit CheckInfo(const Position&);
+//  explicit CheckInfo(const Position&);
 
   Bitboard dcCandidates;
   Bitboard pinned;
@@ -59,6 +59,7 @@ struct StateInfo {
   Bitboard checkersBB;
   PieceType capturedType;
   StateInfo* previous;
+  CheckInfo ci;
 };
 
 
@@ -118,11 +119,11 @@ public:
   template<PieceType> Bitboard attacks_from(Square s, Color c) const;
 
   // Properties of moves
-  bool legal(Move m, Bitboard pinned) const;
+  bool legal(Move m) const;
   bool pseudo_legal(const Move m) const;
   bool capture(Move m) const;
   bool capture_or_promotion(Move m) const;
-  bool gives_check(Move m, const CheckInfo& ci) const;
+  bool gives_check(Move m) const;
   bool advanced_pawn_push(Move m) const;
   Piece moved_piece(Move m) const;
   PieceType captured_piece_type() const;
@@ -135,7 +136,7 @@ public:
 
   // Doing and undoing moves
   void do_move(Move m, StateInfo& st);
-  void do_move(Move m, StateInfo& st, const CheckInfo& ci, bool moveIsCheck);
+  void do_move(Move m, StateInfo& st, bool moveIsCheck);
   void undo_move(Move m);
   void do_null_move(StateInfo& st);
   void undo_null_move();
@@ -162,6 +163,9 @@ public:
   uint64_t nodes_searched() const;
   void set_nodes_searched(uint64_t n);
   bool is_draw() const;
+
+  void init_check_info();
+  CheckInfo *check_info() const;
 
   // Position consistency check, for debugging
   bool pos_is_ok(int* step = NULL) const;
@@ -388,6 +392,11 @@ inline PieceType Position::captured_piece_type() const {
 
 inline Thread* Position::this_thread() const {
   return thisThread;
+}
+
+inline CheckInfo* Position::check_info() const {
+assert(st->ci.pinned != ~0ULL);
+  return &st->ci;
 }
 
 inline void Position::put_piece(Square s, Color c, PieceType pt) {

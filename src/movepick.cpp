@@ -87,7 +87,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const HistoryStats&
   else
       stage = MAIN_SEARCH;
 
-  ttMove = (ttm && pos.pseudo_legal(ttm) ? ttm : MOVE_NONE);
+  ttMove = (ttm && pos.pseudo_legal(ttm) && pos.legal(ttm) ? ttm : MOVE_NONE);
   end += (ttMove != MOVE_NONE);
 }
 
@@ -119,7 +119,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const HistoryStats&
       ttm = MOVE_NONE;
   }
 
-  ttMove = (ttm && pos.pseudo_legal(ttm) ? ttm : MOVE_NONE);
+  ttMove = (ttm && pos.pseudo_legal(ttm) && pos.legal(ttm) ? ttm : MOVE_NONE);
   end += (ttMove != MOVE_NONE);
 }
 
@@ -133,7 +133,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, const HistoryStats& h, Piece
   // In ProbCut we generate only captures that are better than the parent's
   // captured piece.
   captureThreshold = PieceValue[MG][pt];
-  ttMove = (ttm && pos.pseudo_legal(ttm) ? ttm : MOVE_NONE);
+  ttMove = (ttm && pos.pseudo_legal(ttm) && pos.legal(ttm) ? ttm : MOVE_NONE);
 
   if (ttMove && (!pos.capture(ttMove) || pos.see(ttMove) <= captureThreshold))
       ttMove = MOVE_NONE;
@@ -332,6 +332,7 @@ Move MovePicker::next_move<false>() {
           if (    move != MOVE_NONE
               &&  move != ttMove
               &&  pos.pseudo_legal(move)
+              &&  pos.legal(move)
               && !pos.capture(move))
               return move;
           break;
@@ -344,7 +345,11 @@ Move MovePicker::next_move<false>() {
               && move != killers[2].move
               && move != killers[3].move
               && move != killers[4].move
-              && move != killers[5].move)
+              && move != killers[5].move
+              && (   type_of(pos.piece_on(from_sq(move))) != KING
+                  || type_of(move) == CASTLING
+                  || !(pos.attackers_to(to_sq(move)) & pos.pieces(~pos.side_to_move())))
+              )
               return move;
           break;
 
@@ -371,7 +376,7 @@ Move MovePicker::next_move<false>() {
 
       case QUIET_CHECKS_S3:
           move = (cur++)->move;
-          if (move != ttMove)
+          if (move != ttMove && pos.legal(move))
               return move;
           break;
 

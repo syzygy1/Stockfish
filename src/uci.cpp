@@ -208,6 +208,24 @@ void UCI::loop(int argc, char* argv[]) {
       else if (token == "bench")      benchmark(pos, is);
       else if (token == "d")          sync_cout << pos.pretty() << sync_endl;
       else if (token == "isready")    sync_cout << "readyok" << sync_endl;
+      else if (token == "divide" && (is >> token))
+      {
+          stringstream ss;
+          uint64_t total = 0;
+          int depth = atoi(token.c_str()) - 1;
+          StateInfo st;
+
+          for (MoveList<LEGAL> it(pos); *it; ++it)
+          {
+              pos.do_move(*it, st);
+              uint64_t cnt = depth == 0 ? 1 : Search::perft(pos, depth * ONE_PLY);
+              pos.undo_move(*it);
+              sync_cout << move_to_uci(*it, pos.is_chess960())
+                        << ": " << cnt << sync_endl;
+              total += cnt;
+          }
+          sync_cout << "total: " << total << sync_endl;
+      }
       else
           sync_cout << "Unknown command: " << cmd << sync_endl;
 
