@@ -89,26 +89,6 @@ PieceType min_attacker<KING>(const Bitboard*, const Square&, const Bitboard&, Bi
 } // namespace
 
 
-#if 0
-/// CheckInfo c'tor
-
-CheckInfo::CheckInfo(const Position& pos) {
-
-  Color them = ~pos.side_to_move();
-  ksq = pos.king_square(them);
-
-  pinned = pos.pinned_pieces(pos.side_to_move());
-  dcCandidates = pos.discovered_check_candidates();
-
-  checkSq[PAWN]   = pos.attacks_from<PAWN>(ksq, them);
-  checkSq[KNIGHT] = pos.attacks_from<KNIGHT>(ksq);
-  checkSq[BISHOP] = pos.attacks_from<BISHOP>(ksq);
-  checkSq[ROOK]   = pos.attacks_from<ROOK>(ksq);
-  checkSq[QUEEN]  = checkSq[BISHOP] | checkSq[ROOK];
-  checkSq[KING]   = 0;
-}
-#endif
-
 void Position::init_check_info() {
 
   Color them = ~side_to_move();

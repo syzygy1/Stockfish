@@ -34,8 +34,6 @@ struct Thread;
 
 struct CheckInfo {
 
-//  explicit CheckInfo(const Position&);
-
   Bitboard dcCandidates;
   Bitboard pinned;
   Bitboard checkSq[PIECE_TYPE_NB];

@@ -668,7 +668,7 @@ namespace {
                 assert(pos.legal(move));
 
                 ss->currentMove = move;
-                pos.do_move(move, st, pos.gives_check(move));
+                pos.do_move(move, st);
                 value = -search<NonPV, false>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
                 pos.undo_move(move);
                 if (value >= rbeta)
