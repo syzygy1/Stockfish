@@ -89,22 +89,14 @@ namespace {
     std::string do_trace(const Position& pos);
   }
 
-  // Evaluation weights, initialized from UCI options
-  enum { Mobility, PawnStructure, PassedPawns, Space, KingDangerUs, KingDangerThem };
-  struct Weight { int mg, eg; } Weights[6];
+  // Evaluation weights, indexed by evaluation term
+  enum { Mobility, PawnStructure, PassedPawns, Space, KingSafety };
+  const struct Weight { int mg, eg; } Weights[] = {
+    {289, 344}, {233, 201}, {221, 273}, {46, 0}, {318, 0}
+  };
 
   typedef Value V;
   #define S(mg, eg) make_score(mg, eg)
-
-  // Internal evaluation weights. These are applied on top of the evaluation
-  // weights read from UCI parameters. The purpose is to be able to change
-  // the evaluation weights while keeping the default values of the UCI
-  // parameters at 100, which looks prettier.
-  //
-  // Values modified by Joona Kiiski
-  const Score WeightsInternal[] = {
-    S(289, 344), S(233, 201), S(221, 273), S(46, 0), S(271, 0), S(307, 0)
-  };
 
   // MobilityBonus[PieceType][attacked] contains bonuses for middle and end
   // game, indexed by piece type and number of attacked squares not occupied by
@@ -158,18 +150,16 @@ namespace {
     S(0, 0), S(0, 0), S(56, 70), S(56, 70), S(76, 99), S(86, 118)
   };
 
-  // Hanging[side to move] contains a bonus for each enemy hanging piece
-  const Score Hanging[2] = { S(23, 20) , S(35, 45) };
+  // Hanging contains a bonus for each enemy hanging piece
+  const Score Hanging = S(23, 20);
 
   #undef S
 
-  const Score Tempo            = make_score(24, 11);
   const Score RookOnPawn       = make_score(10, 28);
   const Score RookOpenFile     = make_score(43, 21);
   const Score RookSemiopenFile = make_score(19, 10);
   const Score BishopPawns      = make_score( 8, 12);
   const Score MinorBehindPawn  = make_score(16,  0);
-  const Score UndefendedMinor  = make_score(25, 10);
   const Score TrappedRook      = make_score(90,  0);
   const Score Unstoppable      = make_score( 0, 20);
 
@@ -203,25 +193,14 @@ namespace {
   const int BishopCheck       = 2;
   const int KnightCheck       = 3;
 
-  // KingDanger[Color][attackUnits] contains the actual king danger weighted
-  // scores, indexed by color and by a calculated integer number.
-  Score KingDanger[COLOR_NB][128];
+  // KingDanger[attackUnits] contains the actual king danger weighted
+  // scores, indexed by a calculated integer number.
+  Score KingDanger[128];
 
 
   // apply_weight() weighs score 'v' by weight 'w' trying to prevent overflow
   Score apply_weight(Score v, const Weight& w) {
     return make_score(mg_value(v) * w.mg / 256, eg_value(v) * w.eg / 256);
-  }
-
-
-  // weight_option() computes the value of an evaluation weight, by combining
-  // two UCI-configurable weights (midgame and endgame) with an internal weight.
-
-  Weight weight_option(const std::string& mgOpt, const std::string& egOpt, Score internalWeight) {
-
-    Weight w = { Options[mgOpt] * mg_value(internalWeight) / 100,
-                 Options[egOpt] * eg_value(internalWeight) / 100 };
-    return w;
   }
 
 
@@ -446,9 +425,7 @@ namespace {
                   | ei.attackedBy[Them][BISHOP] | ei.attackedBy[Them][ROOK]);
 
             if (b)
-                attackUnits +=  QueenContactCheck
-                              * popcount<Max15>(b)
-                              * (Them == pos.side_to_move() ? 2 : 1);
+                attackUnits +=  QueenContactCheck * popcount<Max15>(b);
         }
 
         // Analyse the enemy's safe rook contact checks. Firstly, find the
@@ -466,9 +443,7 @@ namespace {
                   | ei.attackedBy[Them][BISHOP] | ei.attackedBy[Them][QUEEN]);
 
             if (b)
-                attackUnits +=  RookContactCheck
-                              * popcount<Max15>(b)
-                              * (Them == pos.side_to_move() ? 2 : 1);
+                attackUnits +=  RookContactCheck * popcount<Max15>(b);
         }
 
         // Analyse the enemy's safe distance checks for sliders and knights
@@ -502,7 +477,7 @@ namespace {
 
         // Finally, extract the king danger score from the KingDanger[]
         // array and subtract the score from evaluation.
-        score -= KingDanger[Us == Search::RootColor][attackUnits];
+        score -= KingDanger[attackUnits];
     }
 
     if (Trace)
@@ -520,15 +495,8 @@ namespace {
 
     const Color Them = (Us == WHITE ? BLACK : WHITE);
 
-    Bitboard b, undefendedMinors, weakEnemies;
+    Bitboard b, weakEnemies;
     Score score = SCORE_ZERO;
-
-    // Undefended minors get penalized even if they are not under attack
-    undefendedMinors =  pos.pieces(Them, BISHOP, KNIGHT)
-                      & ~ei.attackedBy[Them][ALL_PIECES];
-
-    if (undefendedMinors)
-        score += UndefendedMinor;
 
     // Enemies not defended by a pawn and under our attack
     weakEnemies =  pos.pieces(Them)
@@ -548,8 +516,7 @@ namespace {
 
         b = weakEnemies & ~ei.attackedBy[Them][ALL_PIECES];
         if (b)
-            score += more_than_one(b) ? Hanging[Us != pos.side_to_move()] * popcount<Max15>(b)
-                                      : Hanging[Us == pos.side_to_move()];
+            score += more_than_one(b) ? Hanging * popcount<Max15>(b) : Hanging;
     }
 
     if (Trace)
@@ -704,9 +671,9 @@ namespace {
     Thread* thisThread = pos.this_thread();
 
     // Initialize score by reading the incrementally updated scores included
-    // in the position object (material + piece square tables) and adding a
-    // Tempo bonus. Score is computed from the point of view of white.
-    score = pos.psq_score() + (pos.side_to_move() == WHITE ? Tempo : -Tempo);
+    // in the position object (material + piece square tables).
+    // Score is computed from the point of view of white.
+    score = pos.psq_score();
 
     // Probe the material hash table
     ei.mi = Material::probe(pos, thisThread->materialTable, thisThread->endgames);
@@ -787,13 +754,6 @@ namespace {
              sf = ScaleFactor(50 * sf / SCALE_FACTOR_NORMAL);
     }
 
-    // Stealmate detection
-    Color stm = pos.side_to_move();
-    if (   (ei.attackedBy[stm][ALL_PIECES] == ei.attackedBy[stm][KING])
-        && (!(ei.attackedBy[stm][KING] & ~ei.attackedBy[~stm][ALL_PIECES]))
-        && !MoveList<LEGAL>(pos).size())
-        sf = SCALE_FACTOR_DRAW;
-
     // Interpolate between a middlegame and a (scaled by 'sf') endgame score
     Value v =  mg_value(score) * int(ei.mi->game_phase())
              + eg_value(score) * int(PHASE_MIDGAME - ei.mi->game_phase()) * sf / SCALE_FACTOR_NORMAL;
@@ -865,7 +825,7 @@ namespace {
        << "                     |   MG    EG  |   MG    EG  |   MG    EG  \n"
        << "---------------------+-------------+-------------+-------------\n";
 
-    format_row(ss, "Material, PST, Tempo", PST);
+    format_row(ss, "Material, PST", PST);
     format_row(ss, "Material imbalance", IMBALANCE);
     format_row(ss, "Pawns", PAWN);
     format_row(ss, "Knights", KNIGHT);
@@ -913,22 +873,13 @@ namespace Eval {
 
   void init() {
 
-    Weights[Mobility]       = weight_option("Mobility (Midgame)", "Mobility (Endgame)", WeightsInternal[Mobility]);
-    Weights[PawnStructure]  = weight_option("Pawn Structure (Midgame)", "Pawn Structure (Endgame)", WeightsInternal[PawnStructure]);
-    Weights[PassedPawns]    = weight_option("Passed Pawns (Midgame)", "Passed Pawns (Endgame)", WeightsInternal[PassedPawns]);
-    Weights[Space]          = weight_option("Space", "Space", WeightsInternal[Space]);
-    Weights[KingDangerUs]   = weight_option("Cowardice", "Cowardice", WeightsInternal[KingDangerUs]);
-    Weights[KingDangerThem] = weight_option("Aggressiveness", "Aggressiveness", WeightsInternal[KingDangerThem]);
-
     const double MaxSlope = 30;
     const double Peak = 1280;
 
     for (int t = 0, i = 1; i < 100; ++i)
     {
         t = int(std::min(Peak, std::min(0.4 * i * i, t + MaxSlope)));
-
-        KingDanger[1][i] = apply_weight(make_score(t, 0), Weights[KingDangerUs]);
-        KingDanger[0][i] = apply_weight(make_score(t, 0), Weights[KingDangerThem]);
+        KingDanger[i] = apply_weight(make_score(t, 0), Weights[KingSafety]);
     }
   }
 

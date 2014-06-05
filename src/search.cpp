@@ -25,11 +25,11 @@
 #include <iostream>
 #include <sstream>
 
-#include "book.h"
 #include "evaluate.h"
 #include "movegen.h"
 #include "movepick.h"
 #include "notation.h"
+#include "rkiss.h"
 #include "search.h"
 #include "tbprobe.h"
 #include "timeman.h"
@@ -43,10 +43,8 @@ namespace Search {
   LimitsType Limits;
   std::vector<RootMove> RootMoves;
   Position RootPos;
-  Color RootColor;
   Time::point SearchTime;
   StateStackPtr SetupStates;
-  Value Contempt[2]; // [bestValue > VALUE_DRAW]
   int TBCardinality;
   uint64_t TBHits;
   bool RootInTB;
@@ -65,7 +63,7 @@ namespace {
   const bool FakeSplit = false;
 
   // Different node types, used as template parameter
-  enum NodeType { Root, PV, NonPV, SplitPointRoot, SplitPointPV, SplitPointNonPV };
+  enum NodeType { Root, PV, NonPV };
 
   // Dynamic razoring margin based on depth
   inline Value razor_margin(Depth d) { return Value(512 + 16 * d); }
@@ -85,6 +83,9 @@ namespace {
     return (Depth) Reductions[PvNode][i][std::min(int(d) / ONE_PLY, 63)][std::min(mn, 63)];
   }
 
+  // Tempo bonus. Must be handled by search to preserve eval symmetry.
+  const int Tempo = 17;
+
   size_t MultiPV, PVIdx;
   TimeManager TimeMgr;
   double BestMoveChanges;
@@ -93,7 +94,7 @@ namespace {
   GainsStats Gains;
   MovesStats Countermoves, Followupmoves;
 
-  template <NodeType NT>
+  template <NodeType NT, bool SpNode>
   Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode);
 
   template <NodeType NT, bool InCheck>
@@ -102,7 +103,7 @@ namespace {
   void id_loop(Position& pos);
   Value value_to_tt(Value v, int ply);
   Value value_from_tt(Value v, int ply);
-  void update_stats(Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt);
+  void update_stats(const Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt);
   string uci_pv(const Position& pos, int depth, Value alpha, Value beta);
 
   struct Skill {
@@ -188,17 +189,14 @@ uint64_t Search::perft(Position& pos, Depth depth) {
 
 void Search::think() {
 
-  static PolyglotBook book; // Defined static to initialize the PRNG only once
+  TimeMgr.init(Limits, RootPos.game_ply(), RootPos.side_to_move());
   int piecesCnt;
-
-  RootColor = RootPos.side_to_move();
-  TimeMgr.init(Limits, RootPos.game_ply(), RootColor);
   TBHits = TBCardinality = 0;
   RootInTB = false;
 
-  DrawValue[0] = DrawValue[1] = VALUE_DRAW;
-  Contempt[0] =  Options["Contempt Factor"] * PawnValueEg / 100; // From centipawns
-  Contempt[1] = (Options["Contempt Factor"] + 12) * PawnValueEg / 100;
+  int cf = Options["Contempt Factor"] * PawnValueEg / 100; // From centipawns
+  DrawValue[ RootPos.side_to_move()] = VALUE_DRAW - Value(cf);
+  DrawValue[~RootPos.side_to_move()] = VALUE_DRAW + Value(cf);
 
   if (RootMoves.empty())
   {
@@ -210,25 +208,14 @@ void Search::think() {
       goto finalize;
   }
 
-  if (Options["OwnBook"] && !Limits.infinite && !Limits.mate)
-  {
-      Move bookMove = book.probe(RootPos, Options["Book File"], Options["Best Book Move"]);
-
-      if (bookMove && std::count(RootMoves.begin(), RootMoves.end(), bookMove))
-      {
-          std::swap(RootMoves[0], *std::find(RootMoves.begin(), RootMoves.end(), bookMove));
-          goto finalize;
-      }
-  }
-
   if (Options["Write Search Log"])
   {
       Log log(Options["Search Log Filename"]);
       log << "\nSearching: "  << RootPos.fen()
           << "\ninfinite: "   << Limits.infinite
           << " ponder: "      << Limits.ponder
-          << " time: "        << Limits.time[RootColor]
-          << " increment: "   << Limits.inc[RootColor]
+          << " time: "        << Limits.time[RootPos.side_to_move()]
+          << " increment: "   << Limits.inc[RootPos.side_to_move()]
           << " moves to go: " << Limits.movestogo
           << "\n" << std::endl;
   }
@@ -288,14 +275,12 @@ void Search::think() {
   for (size_t i = 0; i < Threads.size(); ++i)
       Threads[i]->maxPly = 0;
 
-  Threads.sleepWhileIdle = Options["Idle Threads Sleep"];
   Threads.timer->run = true;
   Threads.timer->notify_one(); // Wake up the recurring timer
 
   id_loop(RootPos); // Let's start searching !
 
   Threads.timer->run = false; // Stop the timer
-  Threads.sleepWhileIdle = true; // Send idle threads to sleep
 
   if (RootInTB)
   {
@@ -405,10 +390,7 @@ namespace {
             // high/low anymore.
             while (true)
             {
-                bestValue = search<Root>(pos, ss, alpha, beta, depth * ONE_PLY, false);
-
-                DrawValue[ RootColor] = VALUE_DRAW - Contempt[bestValue > VALUE_DRAW];
-                DrawValue[~RootColor] = VALUE_DRAW + Contempt[bestValue > VALUE_DRAW];
+                bestValue = search<Root, false>(pos, ss, alpha, beta, depth * ONE_PLY, false);
 
                 // Bring the best move to the front. It is critical that sorting
                 // is done with a stable algorithm because all the values but the
@@ -514,12 +496,11 @@ namespace {
   // repeat all this work again. We also don't need to store anything to the hash
   // table here: This is taken care of after we return from the split point.
 
-  template <NodeType NT>
+  template <NodeType NT, bool SpNode>
   Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode) {
 
-    const bool PvNode   = (NT == PV || NT == Root || NT == SplitPointPV || NT == SplitPointRoot);
-    const bool SpNode   = (NT == SplitPointPV || NT == SplitPointNonPV || NT == SplitPointRoot);
-    const bool RootNode = (NT == Root || NT == SplitPointRoot);
+    const bool RootNode = NT == Root;
+    const bool PvNode   = NT == PV || NT == Root;
 
     assert(-VALUE_INFINITE <= alpha && alpha < beta && beta <= VALUE_INFINITE);
     assert(PvNode || (alpha == beta - 1));
@@ -559,7 +540,7 @@ namespace {
     bestValue = -VALUE_INFINITE;
     ss->currentMove = ss->ttMove = (ss+1)->excludedMove = bestMove = MOVE_NONE;
     ss->ply = (ss-1)->ply + 1;
-    (ss+1)->skipNullMove = false; (ss+1)->reduction = DEPTH_ZERO;
+    (ss+1)->skipNullMove = (ss+1)->nullChild = false; (ss+1)->reduction = DEPTH_ZERO;
     (ss+2)->killers[0] = (ss+2)->killers[1] = MOVE_NONE;
 
     // Used to send selDepth info to GUI
@@ -570,7 +551,7 @@ namespace {
     {
         // Step 2. Check for aborted search and immediate draw
         if (Signals.stop || pos.is_draw() || ss->ply > MAX_PLY)
-            return ss->ply > MAX_PLY && !inCheck ? evaluate(pos) : DrawValue[pos.side_to_move()];
+            return ss->ply > MAX_PLY && !inCheck ? evaluate(pos) + Tempo : DrawValue[pos.side_to_move()];
 
         // Step 3. Mate distance pruning. Even if we mate at the next move our score
         // would be at best mate_in(ss->ply+1), but if alpha is already bigger because
@@ -656,7 +637,7 @@ namespace {
     {
         // Never assume anything on values stored in TT
         if ((ss->staticEval = eval = tte->eval_value()) == VALUE_NONE)
-            eval = ss->staticEval = evaluate(pos);
+            eval = ss->staticEval = evaluate(pos) + Tempo;
 
         // Can ttValue be used as a better position evaluation?
         if (ttValue != VALUE_NONE)
@@ -665,7 +646,7 @@ namespace {
     }
     else
     {
-        eval = ss->staticEval = evaluate(pos);
+        eval = ss->staticEval = ss->nullChild ? -(ss-1)->staticEval + 2 * Tempo : evaluate(pos) + Tempo;
         TT.store(posKey, VALUE_NONE, BOUND_NONE, DEPTH_NONE, MOVE_NONE, ss->staticEval);
     }
 
@@ -687,6 +668,10 @@ namespace {
         &&  abs(beta) < VALUE_MATE_IN_MAX_PLY
         && !pos.pawn_on_7th(pos.side_to_move()))
     {
+        if (   depth <= ONE_PLY
+            && eval + razor_margin(3 * ONE_PLY) <= alpha)
+            return qsearch<NonPV, false>(pos, ss, alpha, beta, DEPTH_ZERO);
+
         Value ralpha = alpha - razor_margin(depth);
         Value v = qsearch<NonPV, false>(pos, ss, ralpha, ralpha+1, DEPTH_ZERO);
         if (v <= ralpha)
@@ -721,10 +706,10 @@ namespace {
                  + int(eval - beta) / PawnValueMg * ONE_PLY;
 
         pos.do_null_move(st);
-        (ss+1)->skipNullMove = true;
+        (ss+1)->skipNullMove = (ss+1)->nullChild = true;
         nullValue = depth-R < ONE_PLY ? -qsearch<NonPV, false>(pos, ss+1, -beta, -beta+1, DEPTH_ZERO)
-                                      : - search<NonPV>(pos, ss+1, -beta, -beta+1, depth-R, !cutNode);
-        (ss+1)->skipNullMove = false;
+                                      : - search<NonPV, false>(pos, ss+1, -beta, -beta+1, depth-R, !cutNode);
+        (ss+1)->skipNullMove = (ss+1)->nullChild = false;
         pos.undo_null_move();
 
         if (nullValue >= beta)
@@ -739,7 +724,7 @@ namespace {
             // Do verification search at high depths
             ss->skipNullMove = true;
             Value v = depth-R < ONE_PLY ? qsearch<NonPV, false>(pos, ss, beta-1, beta, DEPTH_ZERO)
-                                        :  search<NonPV>(pos, ss, beta-1, beta, depth-R, false);
+                                        :  search<NonPV, false>(pos, ss, beta-1, beta, depth-R, false);
             ss->skipNullMove = false;
 
             if (v >= beta)
@@ -771,7 +756,7 @@ namespace {
             {
                 ss->currentMove = move;
                 pos.do_move(move, st, ci, pos.gives_check(move, ci));
-                value = -search<NonPV>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
+                value = -search<NonPV, false>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
                 pos.undo_move(move);
                 if (value >= rbeta)
                     return value;
@@ -786,7 +771,7 @@ namespace {
         Depth d = depth - 2 * ONE_PLY - (PvNode ? DEPTH_ZERO : depth / 4);
 
         ss->skipNullMove = true;
-        search<PvNode ? PV : NonPV>(pos, ss, alpha, beta, d, true);
+        search<PvNode ? PV : NonPV, false>(pos, ss, alpha, beta, d, true);
         ss->skipNullMove = false;
 
         tte = TT.probe(posKey);
@@ -886,7 +871,7 @@ moves_loop: // When in check and at SpNode search starts from here
           Value rBeta = ttValue - int(depth);
           ss->excludedMove = move;
           ss->skipNullMove = true;
-          value = search<NonPV>(pos, ss, rBeta - 1, rBeta, depth / 2, cutNode);
+          value = search<NonPV, false>(pos, ss, rBeta - 1, rBeta, depth / 2, cutNode);
           ss->skipNullMove = false;
           ss->excludedMove = MOVE_NONE;
 
@@ -982,17 +967,24 @@ moves_loop: // When in check and at SpNode search starts from here
           if (move == countermoves[0] || move == countermoves[1])
               ss->reduction = std::max(DEPTH_ZERO, ss->reduction - ONE_PLY);
 
+          // Decrease reduction for moves that escape a capture
+          if (   ss->reduction
+              && type_of(move) == NORMAL
+              && type_of(pos.piece_on(to_sq(move))) != PAWN
+              && pos.see(make_move(to_sq(move), from_sq(move))) < 0)
+              ss->reduction = std::max(DEPTH_ZERO, ss->reduction - ONE_PLY);
+
           Depth d = std::max(newDepth - ss->reduction, ONE_PLY);
           if (SpNode)
               alpha = splitPoint->alpha;
 
-          value = -search<NonPV>(pos, ss+1, -(alpha+1), -alpha, d, true);
+          value = -search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, d, true);
 
-          // Research at intermediate depth if reduction is very high
+          // Re-search at intermediate depth if reduction is very high
           if (value > alpha && ss->reduction >= 4 * ONE_PLY)
           {
               Depth d2 = std::max(newDepth - 2 * ONE_PLY, ONE_PLY);
-              value = -search<NonPV>(pos, ss+1, -(alpha+1), -alpha, d2, true);
+              value = -search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, d2, true);
           }
 
           doFullDepthSearch = (value > alpha && ss->reduction != DEPTH_ZERO);
@@ -1010,7 +1002,7 @@ moves_loop: // When in check and at SpNode search starts from here
           value = newDepth < ONE_PLY ?
                           givesCheck ? -qsearch<NonPV,  true>(pos, ss+1, -(alpha+1), -alpha, DEPTH_ZERO)
                                      : -qsearch<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, DEPTH_ZERO)
-                                     : - search<NonPV>(pos, ss+1, -(alpha+1), -alpha, newDepth, !cutNode);
+                                     : - search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, newDepth, !cutNode);
       }
 
       // For PV nodes only, do a full PV search on the first move or after a fail
@@ -1020,7 +1012,7 @@ moves_loop: // When in check and at SpNode search starts from here
           value = newDepth < ONE_PLY ?
                           givesCheck ? -qsearch<PV,  true>(pos, ss+1, -beta, -alpha, DEPTH_ZERO)
                                      : -qsearch<PV, false>(pos, ss+1, -beta, -alpha, DEPTH_ZERO)
-                                     : - search<PV>(pos, ss+1, -beta, -alpha, newDepth, false);
+                                     : - search<PV, false>(pos, ss+1, -beta, -alpha, newDepth, false);
       // Step 17. Undo move
       pos.undo_move(move);
 
@@ -1087,8 +1079,10 @@ moves_loop: // When in check and at SpNode search starts from here
 
       // Step 19. Check for splitting the search
       if (   !SpNode
+          &&  Threads.size() >= 2
           &&  depth >= Threads.minimumSplitDepth
-          &&  Threads.available_slave(thisThread)
+          &&  (   !thisThread->activeSplitPoint
+               || !thisThread->activeSplitPoint->allSlavesSearching)
           &&  thisThread->splitPointsSize < MAX_SPLITPOINTS_PER_THREAD)
       {
           assert(bestValue > -VALUE_INFINITE && bestValue < beta);
@@ -1120,17 +1114,17 @@ moves_loop: // When in check and at SpNode search starts from here
     // must be mate or stalemate. If we are in a singular extension search then
     // return a fail low score.
     if (!moveCount)
-        return  excludedMove ? alpha
-              : inCheck ? mated_in(ss->ply) : DrawValue[pos.side_to_move()];
+        bestValue = excludedMove ? alpha
+                   :     inCheck ? mated_in(ss->ply) : DrawValue[pos.side_to_move()];
+
+    // Quiet best move: update killers, history, countermoves and followupmoves
+    else if (bestValue >= beta && !pos.capture_or_promotion(bestMove) && !inCheck)
+        update_stats(pos, ss, bestMove, depth, quietsSearched, quietCount - 1);
 
     TT.store(posKey, value_to_tt(bestValue, ss->ply),
              bestValue >= beta  ? BOUND_LOWER :
              PvNode && bestMove ? BOUND_EXACT : BOUND_UPPER,
              depth, bestMove, ss->staticEval);
-
-    // Quiet best move: update killers, history, countermoves and followupmoves
-    if (bestValue >= beta && !pos.capture_or_promotion(bestMove) && !inCheck)
-        update_stats(pos, ss, bestMove, depth, quietsSearched, quietCount - 1);
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
 
@@ -1145,7 +1139,7 @@ moves_loop: // When in check and at SpNode search starts from here
   template <NodeType NT, bool InCheck>
   Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth) {
 
-    const bool PvNode = (NT == PV);
+    const bool PvNode = NT == PV;
 
     assert(NT == PV || NT == NonPV);
     assert(InCheck == !!pos.checkers());
@@ -1170,7 +1164,7 @@ moves_loop: // When in check and at SpNode search starts from here
 
     // Check for an instant draw or if the maximum ply has been reached
     if (pos.is_draw() || ss->ply > MAX_PLY)
-        return ss->ply > MAX_PLY && !InCheck ? evaluate(pos) : DrawValue[pos.side_to_move()];
+        return ss->ply > MAX_PLY && !InCheck ? evaluate(pos) + Tempo : DrawValue[pos.side_to_move()];
 
     // Decide whether or not to include checks: this fixes also the type of
     // TT entry depth that we are going to use. Note that in qsearch we use
@@ -1207,7 +1201,7 @@ moves_loop: // When in check and at SpNode search starts from here
         {
             // Never assume anything on values stored in TT
             if ((ss->staticEval = bestValue = tte->eval_value()) == VALUE_NONE)
-                ss->staticEval = bestValue = evaluate(pos);
+                ss->staticEval = bestValue = evaluate(pos) + Tempo;
 
             // Can ttValue be used as a better position evaluation?
             if (ttValue != VALUE_NONE)
@@ -1215,7 +1209,7 @@ moves_loop: // When in check and at SpNode search starts from here
                     bestValue = ttValue;
         }
         else
-            ss->staticEval = bestValue = evaluate(pos);
+            ss->staticEval = bestValue = ss->nullChild ? -(ss-1)->staticEval + 2 * Tempo : evaluate(pos) + Tempo;
 
         // Stand pat. Return immediately if static value is at least beta
         if (bestValue >= beta)
@@ -1368,7 +1362,7 @@ moves_loop: // When in check and at SpNode search starts from here
   // update_stats() updates killers, history, countermoves and followupmoves stats after a fail-high
   // of a quiet move.
 
-  void update_stats(Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt) {
+  void update_stats(const Position& pos, Stack* ss, Move move, Depth depth, Move* quiets, int quietsCnt) {
 
     if (ss->killers[0] != move)
     {
@@ -1508,28 +1502,31 @@ void RootMove::extract_pv_from_tt(Position& pos) {
 
   StateInfo state[MAX_PLY_PLUS_6], *st = state;
   const TTEntry* tte;
-  int ply = 0;
-  Move m = pv[0];
+  int ply = 1;    // At root ply is 1...
+  Move m = pv[0]; // ...instead pv[] array starts from 0
+  Value expectedScore = score;
 
   pv.clear();
 
   do {
       pv.push_back(m);
 
-      assert(MoveList<LEGAL>(pos).contains(pv[ply]));
+      assert(MoveList<LEGAL>(pos).contains(pv[ply - 1]));
 
-      pos.do_move(pv[ply++], *st++);
+      pos.do_move(pv[ply++ - 1], *st++);
       tte = TT.probe(pos.key());
+      expectedScore = -expectedScore;
 
   } while (   tte
+           && expectedScore == value_from_tt(tte->value(), ply)
            && pos.pseudo_legal(m = tte->move()) // Local copy, TT could change
            && pos.legal(m, pos.pinned_pieces(pos.side_to_move()))
            && ply < MAX_PLY
-           && (!pos.is_draw() || ply < 2));
+           && (!pos.is_draw() || ply <= 2));
 
   pv.push_back(MOVE_NONE); // Must be zero-terminating
 
-  while (ply) pos.undo_move(pv[--ply]);
+  while (--ply) pos.undo_move(pv[ply - 1]);
 }
 
 
@@ -1541,21 +1538,21 @@ void RootMove::insert_pv_in_tt(Position& pos) {
 
   StateInfo state[MAX_PLY_PLUS_6], *st = state;
   const TTEntry* tte;
-  int ply = 0;
+  int idx = 0; // Ply starts from 1, we need to start from 0
 
   do {
       tte = TT.probe(pos.key());
 
-      if (!tte || tte->move() != pv[ply]) // Don't overwrite correct entries
-          TT.store(pos.key(), VALUE_NONE, BOUND_NONE, DEPTH_NONE, pv[ply], VALUE_NONE);
+      if (!tte || tte->move() != pv[idx]) // Don't overwrite correct entries
+          TT.store(pos.key(), VALUE_NONE, BOUND_NONE, DEPTH_NONE, pv[idx], VALUE_NONE);
 
-      assert(MoveList<LEGAL>(pos).contains(pv[ply]));
+      assert(MoveList<LEGAL>(pos).contains(pv[idx]));
 
-      pos.do_move(pv[ply++], *st++);
+      pos.do_move(pv[idx++], *st++);
 
-  } while (pv[ply] != MOVE_NONE);
+  } while (pv[idx] != MOVE_NONE);
 
-  while (ply) pos.undo_move(pv[--ply]);
+  while (idx) pos.undo_move(pv[--idx]);
 }
 
 
@@ -1573,7 +1570,7 @@ void Thread::idle_loop() {
   {
       // If we are not searching, wait for a condition to be signaled instead of
       // wasting CPU time polling for work.
-      while ((!searching && Threads.sleepWhileIdle) || exit)
+      while (!searching || exit)
       {
           if (exit)
           {
@@ -1626,31 +1623,29 @@ void Thread::idle_loop() {
 
           activePosition = &pos;
 
-          switch (sp->nodeType) {
-          case Root:
-              search<SplitPointRoot>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-              break;
-          case PV:
-              search<SplitPointPV>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-              break;
-          case NonPV:
-              search<SplitPointNonPV>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-              break;
-          default:
+          if (sp->nodeType == NonPV)
+              search<NonPV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+
+          else if (sp->nodeType == PV)
+              search<PV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+
+          else if (sp->nodeType == Root)
+              search<Root, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+
+          else
               assert(false);
-          }
 
           assert(searching);
 
           searching = false;
           activePosition = NULL;
           sp->slavesMask.reset(idx);
+          sp->allSlavesSearching = false;
           sp->nodes += pos.nodes_searched();
 
           // Wake up the master thread so to allow it to return from the idle
           // loop in case we are the last slave of the split point.
-          if (    Threads.sleepWhileIdle
-              &&  this != sp->masterThread
+          if (    this != sp->masterThread
               &&  sp->slavesMask.none())
           {
               assert(!sp->masterThread->searching);
@@ -1659,9 +1654,39 @@ void Thread::idle_loop() {
 
           // After releasing the lock we can't access any SplitPoint related data
           // in a safe way because it could have been released under our feet by
-          // the sp master. Also accessing other Thread objects is unsafe because
-          // if we are exiting there is a chance that they are already freed.
+          // the sp master.
           sp->mutex.unlock();
+
+          // Try to late join to another split point if none of its slaves has
+          // already finished.
+          if (Threads.size() > 2)
+              for (size_t i = 0; i < Threads.size(); ++i)
+              {
+                  const int size = Threads[i]->splitPointsSize; // Local copy
+                  sp = size ? &Threads[i]->splitPoints[size - 1] : NULL;
+
+                  if (   sp
+                      && sp->allSlavesSearching
+                      && available_to(Threads[i]))
+                  {
+                      // Recheck the conditions under lock protection
+                      Threads.mutex.lock();
+                      sp->mutex.lock();
+
+                      if (   sp->allSlavesSearching
+                          && available_to(Threads[i]))
+                      {
+                           sp->slavesMask.set(idx);
+                           activeSplitPoint = sp;
+                           searching = true;
+                      }
+
+                      sp->mutex.unlock();
+                      Threads.mutex.unlock();
+
+                      break; // Just a single attempt
+                  }
+              }
       }
 
       // If this thread is the master of a split point and all slaves have finished

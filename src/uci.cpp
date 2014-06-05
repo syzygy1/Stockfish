@@ -174,12 +174,14 @@ void UCI::loop(int argc, char* argv[]) {
           else
               Search::Limits.ponder = false;
       }
-      else if (token == "perft" && (is >> token)) // Read perft depth
+      else if (token == "perft" || token == "divide")
       {
+          int depth;
           stringstream ss;
 
+          is >> depth;
           ss << Options["Hash"]    << " "
-             << Options["Threads"] << " " << token << " current perft";
+             << Options["Threads"] << " " << depth << " current " << token;
 
           benchmark(pos, ss);
       }
@@ -195,11 +197,7 @@ void UCI::loop(int argc, char* argv[]) {
                     << "\n"       << Options
                     << "\nuciok"  << sync_endl;
 
-      else if (token == "eval")
-      {
-          Search::RootColor = pos.side_to_move(); // Ensure it is set
-          sync_cout << Eval::trace(pos) << sync_endl;
-      }
+      else if (token == "eval")       sync_cout << Eval::trace(pos) << sync_endl;
       else if (token == "ucinewgame") TT.clear();
       else if (token == "go")         go(pos, is);
       else if (token == "position")   position(pos, is);
