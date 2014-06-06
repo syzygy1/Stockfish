@@ -31,6 +31,7 @@
 /// to detect if a move gives check.
 class Position;
 struct Thread;
+struct MovePicker;
 
 struct CheckInfo {
 
@@ -57,15 +58,30 @@ struct StateInfo {
 
   Key key;
   Bitboard checkersBB;
-  PieceType capturedType;
   StateInfo* previous;
+  PieceType capturedType;
+  Move move;
+
+  // split point data
+  MovePicker *movePicker;
+  volatile uint64_t slavesMask;
+  Mutex mutex; // probably better to replace this by a spinlock
+  Depth depth;
+  Value bestValue;
+  volatile Value alpha;
+  Value beta;
+  int nodeType;
+  bool cutNode;
+  Move bestMove;
+  int moveCount;
+  bool cutoff;
 };
 
 
 /// When making a move the current StateInfo up to 'key' excluded is copied to
 /// the new one. Here we calculate the quad words (64bits) needed to be copied.
 const size_t StateCopySize64 = offsetof(StateInfo, key) / sizeof(uint64_t) + 1;
-
+const size_t StateCopySizeNull = offsetof(StateInfo, move) / sizeof(uint64_t) + 1;
 
 /// The Position class stores the information regarding the board representation
 /// like pieces, side to move, hash keys, castling info, etc. The most important
@@ -136,7 +152,7 @@ public:
   // Doing and undoing moves
   void do_move(Move m, StateInfo& st);
   void do_move(Move m, StateInfo& st, const CheckInfo& ci, bool moveIsCheck);
-  void undo_move(Move m);
+  void undo_move();
   void do_null_move(StateInfo& st);
   void undo_null_move();
 
@@ -159,6 +175,7 @@ public:
   int game_ply() const;
   bool is_chess960() const;
   Thread* this_thread() const;
+  void set_thread(Thread* th);
   uint64_t nodes_searched() const;
   void set_nodes_searched(uint64_t n);
   bool is_draw() const;
@@ -166,6 +183,10 @@ public:
   // Position consistency check, for debugging
   bool pos_is_ok(int* step = NULL) const;
   void flip();
+
+  // State info
+  StateInfo& state_info() const;
+  StateInfo& next_state_info() const;
 
 private:
   // Initialization helpers (used while setting up a position)
@@ -193,13 +214,15 @@ private:
   int castlingRightsMask[SQUARE_NB];
   Square castlingRookSquare[CASTLING_RIGHT_NB];
   Bitboard castlingPath[CASTLING_RIGHT_NB];
-  StateInfo startState;
   uint64_t nodes;
   int gamePly;
   Color sideToMove;
   Thread* thisThread;
   StateInfo* st;
   bool chess960;
+
+public:
+  StateInfo state[MAX_PLY];
 };
 
 inline uint64_t Position::nodes_searched() const {
@@ -386,8 +409,20 @@ inline PieceType Position::captured_piece_type() const {
   return st->capturedType;
 }
 
+inline StateInfo& Position::state_info() const {
+  return *st;
+}
+
+inline StateInfo& Position::next_state_info() const {
+  return *(st + 1);
+}
+
 inline Thread* Position::this_thread() const {
   return thisThread;
+}
+
+inline void Position::set_thread(Thread* th) {
+  thisThread = th;
 }
 
 inline void Position::put_piece(Square s, Color c, PieceType pt) {

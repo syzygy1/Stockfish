@@ -88,13 +88,12 @@ public:
   MovePicker(const Position&, Move, const HistoryStats&, PieceType);
   MovePicker(const Position&, Move, Depth, const HistoryStats&, Move*, Move*, Search::Stack*);
 
-  template<bool SpNode> Move next_move();
+  template<bool SpNode> Move next_move(const Position&);
 
 private:
-  template<GenType> void score();
-  void generate_next_stage();
+  template<GenType> void score(const Position&);
+  void generate_next_stage(const Position&);
 
-  const Position& pos;
   const HistoryStats& history;
   Search::Stack* ss;
   Move* countermoves;

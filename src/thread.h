@@ -32,6 +32,7 @@
 const int MAX_THREADS = 128;
 const int MAX_SPLITPOINTS_PER_THREAD = 8;
 
+#if 0
 struct Mutex {
   Mutex() { lock_init(l); }
  ~Mutex() { lock_destroy(l); }
@@ -44,6 +45,7 @@ private:
 
   Lock l;
 };
+#endif
 
 struct ConditionVariable {
   ConditionVariable() { cond_init(c); }
@@ -59,6 +61,7 @@ private:
 
 struct Thread;
 
+#if 0
 struct SplitPoint {
 
   // Const data after split point has been setup
@@ -85,6 +88,7 @@ struct SplitPoint {
   volatile int moveCount;
   volatile bool cutoff;
 };
+#endif
 
 
 /// ThreadBase struct is the base of the hierarchy from where we derive all the
@@ -114,24 +118,62 @@ struct Thread : public ThreadBase {
 
   Thread();
   virtual void idle_loop();
-  bool cutoff_occurred() const;
-  bool available_to(const Thread* master) const;
+  void help_slaves(int ply);
+  template <bool> bool find_split_point();
+  static void init_search_threads();
+  bool aborted();
+  int abort_value();
+  void set_abort(int ply);
+  void clear_abort(int ply);
+  void set_splitpoint(int ply);
+  void clear_splitpoint(int ply);
+  static void abort_slaves(StateInfo* sp, int ply);
+  static void clear_slave(StateInfo* sp, int idx);
 
-  template <bool Fake>
-  void split(Position& pos, const Search::Stack* ss, Value alpha, Value beta, Value* bestValue, Move* bestMove,
-             Depth depth, int moveCount, MovePicker* movePicker, int nodeType, bool cutNode);
-
-  SplitPoint splitPoints[MAX_SPLITPOINTS_PER_THREAD];
   Material::Table materialTable;
   Endgames endgames;
   Pawns::Table pawnsTable;
-  Position* activePosition;
+  Position *activePosition;
+  StateInfo *activeSplitPoint;
+  Thread *masterThread;
+  Search::Stack *searchStack;
+  int basePly;
   size_t idx;
   int maxPly;
-  SplitPoint* volatile activeSplitPoint;
-  volatile int splitPointsSize;
+  volatile uint64_t splitPointMask;
+  volatile int abort;
   volatile bool searching;
 };
+
+inline bool Thread::aborted() {
+  return abort != 0;
+}
+
+inline int Thread::abort_value() {
+  return abort;
+}
+
+inline void Thread::set_abort(int ply) {
+  int tmp = 0;
+  while (!__sync_val_compare_and_swap(&abort, &tmp, ply))
+    if (tmp <= ply) break;
+}
+
+inline void Thread::clear_abort(int ply) {
+  __sync_val_compare_and_swap(&abort, &ply, 0);
+}
+
+inline void Thread::set_splitpoint(int ply) {
+  __sync_fetch_and_or(&splitPointMask, 1ULL << (ply - 1));
+}
+
+inline void Thread::clear_splitpoint(int ply) {
+  __sync_fetch_and_and(&splitPointMask, ~(1ULL << (ply - 1)));
+}
+
+inline void Thread::clear_slave(StateInfo *sp, int idx) {
+  __sync_fetch_and_xor(&sp->slavesMask, 1ULL << idx);
+}
 
 
 /// MainThread and TimerThread are derived classes used to characterize the two

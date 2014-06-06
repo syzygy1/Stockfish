@@ -69,14 +69,14 @@ namespace {
         return;
 
     pos.set(fen, Options["UCI_Chess960"], Threads.main());
-    SetupStates = Search::StateStackPtr(new std::stack<StateInfo>());
 
     // Parse move list (if any)
     while (is >> token && (m = move_from_uci(pos, token)) != MOVE_NONE)
     {
-        SetupStates->push(StateInfo());
-        pos.do_move(m, SetupStates->top());
+        StateInfo& st = pos.next_state_info();
+        pos.do_move(m, st);
     }
+    // FIXME: rewind
   }
 
 

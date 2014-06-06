@@ -162,8 +162,8 @@ void Position::init() {
 Position& Position::operator=(const Position& pos) {
 
   std::memcpy(this, &pos, sizeof(Position));
-  startState = *st;
-  st = &startState;
+  state[0] = *st;
+  st = &state[0];
   nodes = 0;
 
   assert(pos_is_ok());
@@ -178,8 +178,8 @@ Position& Position::operator=(const Position& pos) {
 void Position::clear() {
 
   std::memset(this, 0, sizeof(Position));
-  startState.epSquare = SQ_NONE;
-  st = &startState;
+  state[0].epSquare = SQ_NONE;
+  st = &state[0];
 
   for (int i = 0; i < PIECE_TYPE_NB; ++i)
       for (int j = 0; j < 16; ++j)
@@ -711,6 +711,8 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
   newSt.previous = st;
   st = &newSt;
 
+  st->move = m;
+
   // Update side to move
   k ^= Zobrist::side;
 
@@ -895,11 +897,13 @@ void Position::do_move(Move m, StateInfo& newSt, const CheckInfo& ci, bool moveI
 /// Position::undo_move() unmakes a move. When it returns, the position should
 /// be restored to exactly the same state as before the move was made.
 
-void Position::undo_move(Move m) {
-
-  assert(is_ok(m));
+void Position::undo_move() {
 
   sideToMove = ~sideToMove;
+
+  Move m = st->move;
+
+  assert(is_ok(m));
 
   Color us = sideToMove;
   Square from = from_sq(m);
@@ -981,10 +985,12 @@ void Position::do_null_move(StateInfo& newSt) {
 
   assert(!checkers());
 
-  std::memcpy(&newSt, st, sizeof(StateInfo)); // Fully copy here
+  std::memcpy(&newSt, st, StateCopySizeNull * sizeof(uint64_t));
 
   newSt.previous = st;
   st = &newSt;
+
+  st->move = MOVE_NULL;
 
   if (st->epSquare != SQ_NONE)
   {

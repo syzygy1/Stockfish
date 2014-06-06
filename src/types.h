@@ -453,4 +453,19 @@ inline const std::string to_string(Square s) {
   return ch;
 }
 
+// ugly to define Mutex here, but to avoid circular inclusion of include files
+struct Mutex {
+  Mutex() { lock_init(l); }
+ ~Mutex() { lock_destroy(l); }
+
+  void lock() { lock_grab(l); }
+  bool trylock() { return lock_grab_try(l); }
+  void unlock() { lock_release(l); }
+
+private:
+  friend struct ConditionVariable;
+
+  Lock l;
+};
+
 #endif // #ifndef TYPES_H_INCLUDED

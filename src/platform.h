@@ -60,6 +60,7 @@ typedef void*(*pt_start_fn)(void*);
 
 #  define lock_init(x) pthread_mutex_init(&(x), NULL)
 #  define lock_grab(x) pthread_mutex_lock(&(x))
+#  define lock_grab_try(x) pthread_mutex_trylock(&(x))
 #  define lock_release(x) pthread_mutex_unlock(&(x))
 #  define lock_destroy(x) pthread_mutex_destroy(&(x))
 #  define cond_destroy(x) pthread_cond_destroy(&(x))
@@ -101,6 +102,7 @@ inline DWORD* dwWin9xKludge() { static DWORD dw; return &dw; }
 
 #  define lock_init(x) InitializeCriticalSection(&(x))
 #  define lock_grab(x) EnterCriticalSection(&(x))
+#  define lock_grab_try(x) TryEnterCriticalSection(&(x))
 #  define lock_release(x) LeaveCriticalSection(&(x))
 #  define lock_destroy(x) DeleteCriticalSection(&(x))
 #  define cond_init(x) { x = CreateEvent(0, FALSE, FALSE, 0); }

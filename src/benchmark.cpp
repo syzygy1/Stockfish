@@ -140,10 +140,9 @@ void benchmark(const Position& current, istream& is) {
       if (limitType == "divide")
           for (MoveList<LEGAL> it(pos); *it; ++it)
           {
-              StateInfo si;
-              pos.do_move(*it, si);
+              pos.do_move(*it, pos.next_state_info());
               uint64_t cnt = limits.depth > 1 ? Search::perft(pos, (limits.depth - 1) * ONE_PLY) : 1;
-              pos.undo_move(*it);
+              pos.undo_move();
               cerr << move_to_uci(*it, pos.is_chess960()) << ": " << cnt << endl;
               nodes += cnt;
           }

@@ -70,8 +70,8 @@ namespace {
 /// search captures, promotions and some checks) and how important good move
 /// ordering is at the current node.
 
-MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const HistoryStats& h,
-                       Move* cm, Move* fm, Search::Stack* s) : pos(p), history(h), depth(d) {
+MovePicker::MovePicker(const Position& pos, Move ttm, Depth d, const HistoryStats& h,
+                       Move* cm, Move* fm, Search::Stack* s) : history(h), depth(d) {
 
   assert(d > DEPTH_ZERO);
 
@@ -91,8 +91,8 @@ MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const HistoryStats&
   end += (ttMove != MOVE_NONE);
 }
 
-MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const HistoryStats& h,
-                       Square s) : pos(p), history(h), cur(moves), end(moves) {
+MovePicker::MovePicker(const Position& pos, Move ttm, Depth d, const HistoryStats& h,
+                       Square s) : history(h), cur(moves), end(moves) {
 
   assert(d <= DEPTH_ZERO);
 
@@ -123,8 +123,8 @@ MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const HistoryStats&
   end += (ttMove != MOVE_NONE);
 }
 
-MovePicker::MovePicker(const Position& p, Move ttm, const HistoryStats& h, PieceType pt)
-                       : pos(p), history(h), cur(moves), end(moves) {
+MovePicker::MovePicker(const Position& pos, Move ttm, const HistoryStats& h, PieceType pt)
+                       : history(h), cur(moves), end(moves) {
 
   assert(!pos.checkers());
 
@@ -145,7 +145,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, const HistoryStats& h, Piece
 /// score() assign a numerical value to each move in a move list. The moves with
 /// highest values will be picked first.
 template<>
-void MovePicker::score<CAPTURES>() {
+void MovePicker::score<CAPTURES>(const Position& pos) {
   // Winning and equal captures in the main search are ordered by MVV/LVA.
   // Suprisingly, this appears to perform slightly better than SEE based
   // move ordering. The reason is probably that in a position with a winning
@@ -176,7 +176,7 @@ void MovePicker::score<CAPTURES>() {
 }
 
 template<>
-void MovePicker::score<QUIETS>() {
+void MovePicker::score<QUIETS>(const Position& pos) {
 
   Move m;
 
@@ -188,7 +188,7 @@ void MovePicker::score<QUIETS>() {
 }
 
 template<>
-void MovePicker::score<EVASIONS>() {
+void MovePicker::score<EVASIONS>(const Position &pos) {
   // Try good captures ordered by MVV/LVA, then non-captures if destination square
   // is not under attack, ordered by history value, then bad-captures and quiet
   // moves with a negative SEE. This last group is ordered by the SEE value.
@@ -213,7 +213,7 @@ void MovePicker::score<EVASIONS>() {
 /// generate_next_stage() generates, scores and sorts the next bunch of moves,
 /// when there are no more moves to try for the current stage.
 
-void MovePicker::generate_next_stage() {
+void MovePicker::generate_next_stage(const Position& pos) {
 
   cur = moves;
 
@@ -221,7 +221,7 @@ void MovePicker::generate_next_stage() {
 
   case CAPTURES_S1: case CAPTURES_S3: case CAPTURES_S4: case CAPTURES_S5: case CAPTURES_S6:
       end = generate<CAPTURES>(pos, moves);
-      score<CAPTURES>();
+      score<CAPTURES>(pos);
       return;
 
   case KILLERS_S1:
@@ -253,7 +253,7 @@ void MovePicker::generate_next_stage() {
 
   case QUIETS_1_S1:
       endQuiets = end = generate<QUIETS>(pos, moves);
-      score<QUIETS>();
+      score<QUIETS>(pos);
       end = std::partition(cur, end, has_positive_value);
       insertion_sort(cur, end);
       return;
@@ -274,7 +274,7 @@ void MovePicker::generate_next_stage() {
   case EVASIONS_S2:
       end = generate<EVASIONS>(pos, moves);
       if (end > moves + 1)
-          score<EVASIONS>();
+          score<EVASIONS>(pos);
       return;
 
   case QUIET_CHECKS_S3:
@@ -300,14 +300,14 @@ void MovePicker::generate_next_stage() {
 /// left. It picks the move with the biggest value from a list of generated moves
 /// taking care not to return the ttMove if it has already been searched.
 template<>
-Move MovePicker::next_move<false>() {
+Move MovePicker::next_move<false>(const Position& pos) {
 
   Move move;
 
   while (true)
   {
       while (cur == end)
-          generate_next_stage();
+          generate_next_stage(pos);
 
       switch (stage) {
 
@@ -384,9 +384,10 @@ Move MovePicker::next_move<false>() {
   }
 }
 
-
+#if 0
 /// Version of next_move() to use at split point nodes where the move is grabbed
 /// from the split point's shared MovePicker object. This function is not thread
 /// safe so must be lock protected by the caller.
 template<>
 Move MovePicker::next_move<true>() { return ss->splitPoint->movePicker->next_move<false>(); }
+#endif

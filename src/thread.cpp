@@ -85,45 +85,21 @@ void ThreadBase::wait_for(volatile const bool& b) {
 Thread::Thread() /* : splitPoints() */ { // Value-initialization bug in MSVC
 
   searching = false;
-  maxPly = splitPointsSize = 0;
-  activeSplitPoint = NULL;
-  activePosition = NULL;
+  maxPly = 0;
   idx = Threads.size(); // Starts from 0
+  activePosition = idx == 0 ? &RootPos : new Position();
 }
 
 
-// cutoff_occurred() checks whether a beta cutoff has occurred in the
-// current active split point, or in some ancestor of the split point.
+void Thread::abort_slaves(StateInfo* sp, int ply) {
 
-bool Thread::cutoff_occurred() const {
+  uint64_t slaves = sp->slavesMask;
 
-  for (SplitPoint* sp = activeSplitPoint; sp; sp = sp->parentSplitPoint)
-      if (sp->cutoff)
-          return true;
-
-  return false;
-}
-
-
-// Thread::available_to() checks whether the thread is available to help the
-// thread 'master' at a split point. An obvious requirement is that thread must
-// be idle. With more than two threads, this is not sufficient: If the thread is
-// the master of some split point, it is only available as a slave to the slaves
-// which are busy searching the split point at the top of slave's split point
-// stack (the "helpful master concept" in YBWC terminology).
-
-bool Thread::available_to(const Thread* master) const {
-
-  if (searching)
-      return false;
-
-  // Make a local copy to be sure it doesn't become zero under our feet while
-  // testing next condition and so leading to an out of bounds access.
-  const int size = splitPointsSize;
-
-  // No split points means that the thread is available as a slave for any
-  // other thread otherwise apply the "helpful master" concept if possible.
-  return !size || splitPoints[size - 1].slavesMask.test(master->idx);
+  while (slaves)
+  {
+      int t = pop_lsb(&slaves);
+      Threads[t]->set_abort(ply);
+  }
 }
 
 
@@ -231,117 +207,6 @@ void ThreadPool::read_uci_options() {
       pop_back();
   }
 }
-
-
-// available_slave() tries to find an idle thread which is available as a slave
-// for the thread 'master'.
-
-Thread* ThreadPool::available_slave(const Thread* master) const {
-
-  for (const_iterator it = begin(); it != end(); ++it)
-      if ((*it)->available_to(master))
-          return *it;
-
-  return NULL;
-}
-
-
-// split() does the actual work of distributing the work at a node between
-// several available threads. If it does not succeed in splitting the node
-// (because no idle threads are available), the function immediately returns.
-// If splitting is possible, a SplitPoint object is initialized with all the
-// data that must be copied to the helper threads and then helper threads are
-// told that they have been assigned work. This will cause them to instantly
-// leave their idle loops and call search(). When all threads have returned from
-// search() then split() returns.
-
-template <bool Fake>
-void Thread::split(Position& pos, const Stack* ss, Value alpha, Value beta, Value* bestValue,
-                   Move* bestMove, Depth depth, int moveCount,
-                   MovePicker* movePicker, int nodeType, bool cutNode) {
-
-  assert(pos.pos_is_ok());
-  assert(-VALUE_INFINITE < *bestValue && *bestValue <= alpha && alpha < beta && beta <= VALUE_INFINITE);
-  assert(depth >= Threads.minimumSplitDepth);
-  assert(searching);
-  assert(splitPointsSize < MAX_SPLITPOINTS_PER_THREAD);
-
-  // Pick the next available split point from the split point stack
-  SplitPoint& sp = splitPoints[splitPointsSize];
-
-  sp.masterThread = this;
-  sp.parentSplitPoint = activeSplitPoint;
-  sp.slavesMask = 0, sp.slavesMask.set(idx);
-  sp.depth = depth;
-  sp.bestValue = *bestValue;
-  sp.bestMove = *bestMove;
-  sp.alpha = alpha;
-  sp.beta = beta;
-  sp.nodeType = nodeType;
-  sp.cutNode = cutNode;
-  sp.movePicker = movePicker;
-  sp.moveCount = moveCount;
-  sp.pos = &pos;
-  sp.nodes = 0;
-  sp.cutoff = false;
-  sp.ss = ss;
-
-  // Try to allocate available threads and ask them to start searching setting
-  // 'searching' flag. This must be done under lock protection to avoid concurrent
-  // allocation of the same slave by another master.
-  Threads.mutex.lock();
-  sp.mutex.lock();
-
-  sp.allSlavesSearching = true; // Must be set under lock protection
-  ++splitPointsSize;
-  activeSplitPoint = &sp;
-  activePosition = NULL;
-
-  if (!Fake)
-      for (Thread* slave; (slave = Threads.available_slave(this)) != NULL; )
-      {
-          sp.slavesMask.set(slave->idx);
-          slave->activeSplitPoint = &sp;
-          slave->searching = true; // Slave leaves idle_loop()
-          slave->notify_one(); // Could be sleeping
-      }
-
-  // Everything is set up. The master thread enters the idle loop, from which
-  // it will instantly launch a search, because its 'searching' flag is set.
-  // The thread will return from the idle loop when all slaves have finished
-  // their work at this split point.
-  sp.mutex.unlock();
-  Threads.mutex.unlock();
-
-  Thread::idle_loop(); // Force a call to base class idle_loop()
-
-  // In the helpful master concept, a master can help only a sub-tree of its
-  // split point and because everything is finished here, it's not possible
-  // for the master to be booked.
-  assert(!searching);
-  assert(!activePosition);
-
-  // We have returned from the idle loop, which means that all threads are
-  // finished. Note that setting 'searching' and decreasing splitPointsSize is
-  // done under lock protection to avoid a race with Thread::available_to().
-  Threads.mutex.lock();
-  sp.mutex.lock();
-
-  searching = true;
-  --splitPointsSize;
-  activeSplitPoint = sp.parentSplitPoint;
-  activePosition = &pos;
-  pos.set_nodes_searched(pos.nodes_searched() + sp.nodes);
-  *bestMove = sp.bestMove;
-  *bestValue = sp.bestValue;
-
-  sp.mutex.unlock();
-  Threads.mutex.unlock();
-}
-
-// Explicit template instantiations
-template void Thread::split<false>(Position&, const Stack*, Value, Value, Value*, Move*, Depth, int, MovePicker*, int, bool);
-template void Thread::split< true>(Position&, const Stack*, Value, Value, Value*, Move*, Depth, int, MovePicker*, int, bool);
 
 
 // wait_for_think_finished() waits for main thread to go to sleep then returns

@@ -158,7 +158,7 @@ void Search::init() {
 
 static uint64_t perft(Position& pos, Depth depth) {
 
-  StateInfo st;
+  StateInfo& st = pos.next_state_info();
   uint64_t cnt = 0;
   CheckInfo ci(pos);
   const bool leaf = depth == 2 * ONE_PLY;
@@ -167,7 +167,7 @@ static uint64_t perft(Position& pos, Depth depth) {
   {
       pos.do_move(*it, st, ci, pos.gives_check(*it, ci));
       cnt += leaf ? MoveList<LEGAL>(pos).size() : ::perft(pos, depth - ONE_PLY);
-      pos.undo_move(*it);
+      pos.undo_move();
   }
   return cnt;
 }
@@ -210,12 +210,15 @@ void Search::think() {
           << "\n" << std::endl;
   }
 
-  // Reset the threads, still sleeping: will wake up at split time
+  // Reset the threads, still sleeping
   for (size_t i = 0; i < Threads.size(); ++i)
       Threads[i]->maxPly = 0;
 
   Threads.timer->run = true;
   Threads.timer->notify_one(); // Wake up the recurring timer
+
+  // initialize and wake up the other search threads
+  Thread::init_search_threads();
 
   id_loop(RootPos); // Let's start searching !
 
@@ -230,10 +233,10 @@ void Search::think() {
           << "\nNodes/second: " << RootPos.nodes_searched() * 1000 / elapsed
           << "\nBest move: "    << move_to_san(RootPos, RootMoves[0].pv[0]);
 
-      StateInfo st;
+      StateInfo& st = RootPos.next_state_info();
       RootPos.do_move(RootMoves[0].pv[0], st);
       log << "\nPonder move: " << move_to_san(RootPos, RootMoves[0].pv[1]) << std::endl;
-      RootPos.undo_move(RootMoves[0].pv[0]);
+      RootPos.undo_move();
   }
 
 finalize:
@@ -274,6 +277,8 @@ namespace {
 
     std::memset(ss-2, 0, 5 * sizeof(Stack));
     (ss-1)->currentMove = MOVE_NULL; // Hack to skip update gains
+
+    RootPos.this_thread()->searchStack = ss;
 
     depth = 0;
     BestMoveChanges = 0;
@@ -324,6 +329,14 @@ namespace {
             while (true)
             {
                 bestValue = search<Root, false>(pos, ss, alpha, beta, depth * ONE_PLY, false);
+
+                uint64_t nodes = RootPos.nodes_searched();
+                for (size_t i = 1; i < Threads.size(); ++i)
+                {
+                    nodes += Threads[i]->activePosition->nodes_searched();
+                    Threads[i]->activePosition->set_nodes_searched(0);
+                }
+                RootPos.set_nodes_searched(nodes);
 
                 // Bring the best move to the front. It is critical that sorting
                 // is done with a stable algorithm because all the values but the
@@ -440,9 +453,9 @@ namespace {
     assert(depth > DEPTH_ZERO);
 
     Move quietsSearched[64];
-    StateInfo st;
+    StateInfo& st = pos.next_state_info();
     const TTEntry *tte;
-    SplitPoint* splitPoint;
+    StateInfo* splitPoint;
     Key posKey;
     Move ttMove, move, excludedMove, bestMove;
     Depth ext, newDepth, predictedDepth;
@@ -450,6 +463,9 @@ namespace {
     bool inCheck, givesCheck, pvMove, singularExtensionNode, improving;
     bool captureOrPromotion, dangerous, doFullDepthSearch;
     int moveCount, quietCount;
+    bool split;
+
+assert(&st == &pos.state[(ss-1)->ply+1]);
 
     // Step 1. Initialize node
     Thread* thisThread = pos.this_thread();
@@ -457,18 +473,23 @@ namespace {
 
     if (SpNode)
     {
-        splitPoint = ss->splitPoint;
-        bestMove   = splitPoint->bestMove;
+        splitPoint = thisThread->activeSplitPoint;
         bestValue  = splitPoint->bestValue;
         tte = NULL;
         ttMove = excludedMove = MOVE_NONE;
         ttValue = VALUE_NONE;
 
-        assert(splitPoint->bestValue > -VALUE_INFINITE && splitPoint->moveCount > 0);
+        assert(   splitPoint->bestValue > -VALUE_INFINITE
+               && splitPoint->moveCount > 0);
+
+        assert(splitPoint->slavesMask & (1ULL << thisThread->idx));
 
         goto moves_loop;
     }
 
+    splitPoint = &st - 1;
+
+    split = false;
     moveCount = quietCount = 0;
     bestValue = -VALUE_INFINITE;
     ss->currentMove = ss->ttMove = (ss+1)->excludedMove = bestMove = MOVE_NONE;
@@ -653,13 +674,13 @@ namespace {
         MovePicker mp(pos, ttMove, History, pos.captured_piece_type());
         CheckInfo ci(pos);
 
-        while ((move = mp.next_move<false>()) != MOVE_NONE)
+        while ((move = mp.next_move<false>(pos)) != MOVE_NONE)
             if (pos.legal(move, ci.pinned))
             {
                 ss->currentMove = move;
                 pos.do_move(move, st, ci, pos.gives_check(move, ci));
                 value = -search<NonPV, false>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
-                pos.undo_move(move);
+                pos.undo_move();
                 if (value >= rbeta)
                     return value;
             }
@@ -707,8 +728,36 @@ moves_loop: // When in check and at SpNode search starts from here
 
     // Step 11. Loop through moves
     // Loop through all pseudo-legal moves until no moves remain or a beta cutoff occurs
-    while ((move = mp.next_move<SpNode>()) != MOVE_NONE)
+    while (1)
     {
+      if (SpNode || split)
+      {
+          splitPoint->mutex.lock();
+          if (SpNode)
+          {
+              if (splitPoint->cutoff)
+                  move = MOVE_NONE;
+              else
+              {
+                  move = splitPoint->movePicker->next_move<false>(pos);
+                  if (move == MOVE_NONE)
+                      thisThread->masterThread->clear_splitpoint(ss->ply);
+              }
+          }
+          else
+          {
+              move = mp.next_move<false>(pos);
+              if (move == MOVE_NONE)
+                  thisThread->clear_splitpoint(ss->ply);
+          }
+          splitPoint->mutex.unlock();
+      }
+      else
+          move = mp.next_move<false>(pos);
+
+      if (move == MOVE_NONE)
+          break;
+
       assert(is_ok(move));
 
       if (move == excludedMove)
@@ -726,11 +775,10 @@ moves_loop: // When in check and at SpNode search starts from here
           if (!pos.legal(move, ci.pinned))
               continue;
 
-          moveCount = ++splitPoint->moveCount;
-          splitPoint->mutex.unlock();
+          moveCount = __sync_add_and_fetch(&splitPoint->moveCount, 1);
       }
       else
-          ++moveCount;
+          ++moveCount; // FIXME: what if split == true?
 
       if (RootNode)
       {
@@ -795,12 +843,7 @@ moves_loop: // When in check and at SpNode search starts from here
           // Move count based pruning
           if (   depth < 16 * ONE_PLY
               && moveCount >= FutilityMoveCounts[improving][depth] )
-          {
-              if (SpNode)
-                  splitPoint->mutex.lock();
-
               continue;
-          }
 
           predictedDepth = newDepth - reduction<PvNode>(improving, depth, moveCount);
 
@@ -816,9 +859,9 @@ moves_loop: // When in check and at SpNode search starts from here
 
                   if (SpNode)
                   {
-                      splitPoint->mutex.lock();
-                      if (bestValue > splitPoint->bestValue)
-                          splitPoint->bestValue = bestValue;
+//                      splitPoint->mutex.lock();
+//                      if (bestValue > splitPoint->bestValue)
+//                          splitPoint->bestValue = bestValue;
                   }
                   continue;
               }
@@ -826,12 +869,7 @@ moves_loop: // When in check and at SpNode search starts from here
 
           // Prune moves with negative SEE at low depths
           if (predictedDepth < 4 * ONE_PLY && pos.see_sign(move) < VALUE_ZERO)
-          {
-              if (SpNode)
-                  splitPoint->mutex.lock();
-
               continue;
-          }
       }
 
       // Check for legality just before making the move
@@ -877,7 +915,7 @@ moves_loop: // When in check and at SpNode search starts from here
               ss->reduction = std::max(DEPTH_ZERO, ss->reduction - ONE_PLY);
 
           Depth d = std::max(newDepth - ss->reduction, ONE_PLY);
-          if (SpNode)
+          if (PvNode && (SpNode || split))
               alpha = splitPoint->alpha;
 
           value = -search<NonPV, false>(pos, ss+1, -(alpha+1), -alpha, d, true);
@@ -898,7 +936,7 @@ moves_loop: // When in check and at SpNode search starts from here
       // Step 16. Full depth search, when LMR is skipped or fails high
       if (doFullDepthSearch)
       {
-          if (SpNode)
+          if (PvNode && (SpNode || split))
               alpha = splitPoint->alpha;
 
           value = newDepth < ONE_PLY ?
@@ -916,26 +954,36 @@ moves_loop: // When in check and at SpNode search starts from here
                                      : -qsearch<PV, false>(pos, ss+1, -beta, -alpha, DEPTH_ZERO)
                                      : - search<PV, false>(pos, ss+1, -beta, -alpha, newDepth, false);
       // Step 17. Undo move
-      pos.undo_move(move);
+      pos.undo_move();
 
       assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
 
       // Step 18. Check for new best move
-      if (SpNode)
+      if (PvNode && (SpNode || split))
       {
-          splitPoint->mutex.lock();
-          bestValue = splitPoint->bestValue;
           alpha = splitPoint->alpha;
       }
 
       // Finished searching the move. If a stop or a cutoff occurred, the return
       // value of the search cannot be trusted, and we return immediately without
       // updating best move, PV and TT.
-      if (Signals.stop || thisThread->cutoff_occurred())
+      if (thisThread->aborted())
+      {
+          if (SpNode)
+          {
+              splitPoint->mutex.lock();
+              splitPoint->slavesMask ^= 1ULL << thisThread->idx;
+              splitPoint->mutex.unlock();
+          }
+          if (!SpNode && split)
+              goto aborted;
           return VALUE_ZERO;
+      }
 
       if (RootNode)
       {
+          splitPoint->mutex.lock();
+
           RootMove& rm = *std::find(RootMoves.begin(), RootMoves.end(), move);
 
           // PV move or new best move ?
@@ -955,61 +1003,154 @@ moves_loop: // When in check and at SpNode search starts from here
               // not a problem when sorting because the sort is stable and the
               // move position in the list is preserved - just the PV is pushed up.
               rm.score = -VALUE_INFINITE;
+
+          splitPoint->mutex.unlock();
       }
 
       if (value > bestValue)
       {
-          bestValue = SpNode ? splitPoint->bestValue = value : value;
+          bestValue = value;
 
           if (value > alpha)
           {
-              bestMove = SpNode ? splitPoint->bestMove = move : move;
-
-              if (PvNode && value < beta) // Update alpha! Always alpha < beta
-                  alpha = SpNode ? splitPoint->alpha = value : value;
-              else
+              if (!PvNode || value >= beta)
               {
                   assert(value >= beta); // Fail high
 
                   if (SpNode)
+                  {
+                      splitPoint->mutex.lock();
+                      if (!splitPoint->cutoff)
+                      {
+                          Thread::abort_slaves(splitPoint, ss->ply);
+                          thisThread->masterThread->set_abort(ss->ply);
+                          if (value > splitPoint->bestValue)
+                          {
+                              splitPoint->bestValue = value;
+                              splitPoint->bestMove = move;
+                          }
+                          thisThread->masterThread->clear_splitpoint(ss->ply);
+                      }
+                      splitPoint->slavesMask ^= 1ULL << thisThread->idx;
+                      splitPoint->mutex.unlock();
+                      return VALUE_ZERO;
+                  }
+                  else if (split)
+                  {
+                      splitPoint->mutex.lock();
+                      thisThread->clear_splitpoint(ss->ply);
                       splitPoint->cutoff = true;
-
-                  break;
+                      if (splitPoint->slavesMask)
+                          Thread::abort_slaves(splitPoint, ss->ply);
+                      splitPoint->mutex.unlock();
+                      thisThread->clear_abort(ss->ply);
+                  }
+                  bestMove = move;
+                  goto beta_cutoff;
+              }
+              else // Update alpha
+              {
+                  alpha = value;
+                  if (SpNode)
+                  {
+                      splitPoint->mutex.lock();
+                      if (   alpha > splitPoint->alpha
+                          && alpha > splitPoint->bestValue)
+                      {
+                          splitPoint->bestValue = alpha;
+                          splitPoint->alpha = alpha;
+                          splitPoint->bestMove = move;
+                      }
+                      splitPoint->mutex.unlock();
+                  }
+                  else if (split)
+                  {
+                      splitPoint->mutex.lock();
+                      if (alpha > splitPoint->alpha)
+                      {
+                          splitPoint->alpha = alpha;
+                          splitPoint->bestMove = move; // necessary?
+                      }
+                      splitPoint->mutex.unlock();
+                  }
               }
           }
       }
 
-      // Step 19. Check for splitting the search
+      // Step 19. Check for turning this node into a candidate split point
+      // possible extra conditions (currently not implemented):
+      // - first grab a move, don't split if there is none
+      // - in non-PV nodes, only split after captures or killers
+      // - in non-PV nodes, don't split if in check
       if (   !SpNode
-          &&  Threads.size() >= 2
-          &&  depth >= Threads.minimumSplitDepth
-          &&  (   !thisThread->activeSplitPoint
-               || !thisThread->activeSplitPoint->allSlavesSearching)
-          &&  thisThread->splitPointsSize < MAX_SPLITPOINTS_PER_THREAD)
+          && !split
+          && ss->ply < 64
+          && depth >= Threads.minimumSplitDepth)
       {
-          assert(bestValue > -VALUE_INFINITE && bestValue < beta);
-
-          thisThread->split<FakeSplit>(pos, ss, alpha, beta, &bestValue, &bestMove,
-                                       depth, moveCount, &mp, NT, cutNode);
-
-          if (Signals.stop || thisThread->cutoff_occurred())
-              return VALUE_ZERO;
-
-          if (bestValue >= beta)
-              break;
+          // first make sure this node is free of old slaves
+          while (splitPoint->slavesMask);
+          // memory barrier, in C++11 this can be done within the standard
+          asm volatile("" ::: "memory");
+          splitPoint->depth = depth;
+          splitPoint->bestValue = bestValue;
+          splitPoint->alpha = alpha;
+          splitPoint->beta = beta;
+          splitPoint->nodeType = NT;
+          splitPoint->cutNode = cutNode;
+          splitPoint->movePicker = &mp;
+          splitPoint->moveCount = moveCount;
+          splitPoint->cutoff = false;
+          // another memory barrier
+          asm volatile("" ::: "memory");
+          thisThread->set_splitpoint(ss->ply);
+          split = true;
       }
     }
 
     if (SpNode)
+    {
+        splitPoint->mutex.lock();
+        if (bestValue > splitPoint->bestValue)
+            splitPoint->bestValue = bestValue;
+        thisThread->masterThread->clear_splitpoint(ss->ply);
+        splitPoint->slavesMask ^= 1ULL << thisThread->idx;
+        splitPoint->mutex.unlock();
         return bestValue;
+    }
 
-    // Following condition would detect a stop or a cutoff set only after move
-    // loop has been completed. But in this case bestValue is valid because we
-    // have fully searched our subtree, and we can anyhow save the result in TT.
-    /*
-       if (Signals.stop || thisThread->cutoff_occurred())
-        return VALUE_DRAW;
-    */
+    if (split)
+    {
+        // (Un)Helpful master, still to be done
+        while (splitPoint->slavesMask && !thisThread->aborted())
+            thisThread->help_slaves(ss->ply);
+
+        // handle aborts
+        if (thisThread->aborted())
+        {
+aborted:
+            splitPoint->mutex.lock();
+            splitPoint->cutoff = true;
+            if (thisThread->abort_value() < ss->ply)
+            {
+                thisThread->clear_splitpoint(ss->ply);
+                if (splitPoint->slavesMask)
+                    Thread::abort_slaves(splitPoint, ss->ply);
+                splitPoint->mutex.unlock();
+                return VALUE_ZERO;
+            }
+            splitPoint->mutex.unlock();
+            thisThread->clear_abort(ss->ply);
+        }
+
+        // check for fail high found by slaves
+        Value tmp = splitPoint->bestValue;
+        if (tmp > bestValue)
+        {
+            bestValue = tmp;
+            if (bestValue > alpha)
+                bestMove = splitPoint->bestMove;
+        }
+    }
 
     // Step 20. Check for mate and stalemate
     // All legal moves have been searched and if there are no legal moves, it
@@ -1023,6 +1164,7 @@ moves_loop: // When in check and at SpNode search starts from here
     else if (bestValue >= beta && !pos.capture_or_promotion(bestMove) && !inCheck)
         update_stats(pos, ss, bestMove, depth, quietsSearched, quietCount - 1);
 
+beta_cutoff:
     TT.store(posKey, value_to_tt(bestValue, ss->ply),
              bestValue >= beta  ? BOUND_LOWER :
              PvNode && bestMove ? BOUND_EXACT : BOUND_UPPER,
@@ -1049,7 +1191,7 @@ moves_loop: // When in check and at SpNode search starts from here
     assert(PvNode || (alpha == beta - 1));
     assert(depth <= DEPTH_ZERO);
 
-    StateInfo st;
+    StateInfo& st = pos.next_state_info();
     const TTEntry* tte;
     Key posKey;
     Move ttMove, move, bestMove;
@@ -1137,7 +1279,7 @@ moves_loop: // When in check and at SpNode search starts from here
     CheckInfo ci(pos);
 
     // Loop through the moves until no moves remain or a beta cutoff occurs
-    while ((move = mp.next_move<false>()) != MOVE_NONE)
+    while ((move = mp.next_move<false>(pos)) != MOVE_NONE)
     {
       assert(is_ok(move));
 
@@ -1194,7 +1336,7 @@ moves_loop: // When in check and at SpNode search starts from here
       pos.do_move(move, st, ci, givesCheck);
       value = givesCheck ? -qsearch<NT,  true>(pos, ss+1, -beta, -alpha, depth - ONE_PLY)
                          : -qsearch<NT, false>(pos, ss+1, -beta, -alpha, depth - ONE_PLY);
-      pos.undo_move(move);
+      pos.undo_move();
 
       assert(value > -VALUE_INFINITE && value < VALUE_INFINITE);
 
@@ -1392,7 +1534,7 @@ moves_loop: // When in check and at SpNode search starts from here
 
 void RootMove::extract_pv_from_tt(Position& pos) {
 
-  StateInfo state[MAX_PLY_PLUS_6], *st = state;
+//  StateInfo state[MAX_PLY_PLUS_6], *st = state;
   const TTEntry* tte;
   int ply = 1;    // At root ply is 1...
   Move m = pv[0]; // ...instead pv[] array starts from 0
@@ -1405,7 +1547,7 @@ void RootMove::extract_pv_from_tt(Position& pos) {
 
       assert(MoveList<LEGAL>(pos).contains(pv[ply - 1]));
 
-      pos.do_move(pv[ply++ - 1], *st++);
+      pos.do_move(pv[ply++ - 1], pos.next_state_info());
       tte = TT.probe(pos.key());
       expectedScore = -expectedScore;
 
@@ -1418,7 +1560,7 @@ void RootMove::extract_pv_from_tt(Position& pos) {
 
   pv.push_back(MOVE_NONE); // Must be zero-terminating
 
-  while (--ply) pos.undo_move(pv[ply - 1]);
+  while (--ply) pos.undo_move();
 }
 
 
@@ -1428,7 +1570,7 @@ void RootMove::extract_pv_from_tt(Position& pos) {
 
 void RootMove::insert_pv_in_tt(Position& pos) {
 
-  StateInfo state[MAX_PLY_PLUS_6], *st = state;
+//  StateInfo state[MAX_PLY_PLUS_6], *st = state;
   const TTEntry* tte;
   int idx = 0; // Ply starts from 1, we need to start from 0
 
@@ -1440,160 +1582,233 @@ void RootMove::insert_pv_in_tt(Position& pos) {
 
       assert(MoveList<LEGAL>(pos).contains(pv[idx]));
 
-      pos.do_move(pv[idx++], *st++);
+      pos.do_move(pv[idx++], pos.next_state_info());
 
   } while (pv[idx] != MOVE_NONE);
 
-  while (idx) pos.undo_move(pv[--idx]);
+  while (idx--) pos.undo_move();
 }
 
 
-/// Thread::idle_loop() is where the thread is parked when it has no work to do
+template <bool HelpfulMaster>
+bool Thread::find_split_point() {
 
-void Thread::idle_loop() {
+  size_t t;
+  StateInfo* splitPoint;
+  int split_ply = 0;
+  uint64_t mask = HelpfulMaster ? ~1ULL << basePly : ~0ULL;
 
-  // Pointer 'this_sp' is not null only if we are called from split(), and not
-  // at the thread creation. This means we are the split point's master.
-  SplitPoint* this_sp = splitPointsSize ? activeSplitPoint : NULL;
-
-  assert(!this_sp || (this_sp->masterThread == this && searching));
+  if (!HelpfulMaster)
+      Threads.mutex.lock();
+  else
+      if (Threads.mutex.trylock() != 0)
+          return false;
 
   while (true)
   {
-      // If we are not searching, wait for a condition to be signaled instead of
-      // wasting CPU time polling for work.
-      while (!searching || exit)
+      if (!searching)
       {
-          if (exit)
-          {
-              assert(!this_sp);
-              return;
-          }
-
-          // Grab the lock to avoid races with Thread::notify_one()
-          mutex.lock();
-
-          // If we are master and all slaves have finished then exit idle_loop
-          if (this_sp && this_sp->slavesMask.none())
-          {
-              mutex.unlock();
-              break;
-          }
-
-          // Do sleep after retesting sleep conditions under lock protection. In
-          // particular we need to avoid a deadlock in case a master thread has,
-          // in the meanwhile, allocated us and sent the notify_one() call before
-          // we had the chance to grab the lock.
-          if (!searching && !exit)
-              sleepCondition.wait(mutex);
-
-          mutex.unlock();
+          Threads.mutex.unlock();
+          return false;
       }
 
-      // If this thread has been assigned work, launch a search
-      if (searching)
+      Depth split_depth = (Depth)0;
+
+      // loop over all threads to find the split point of highest depth
+      for (size_t i = 0; i < Threads.size(); ++i)
       {
-          assert(!exit);
+          uint64_t splits = Threads[i]->splitPointMask & mask;
+          if (splits)
+          {
+              int ply = lsb(splits); // 0 = root
+              Depth d = Threads[i]->activePosition->state[ply].depth;
+              if (d > split_depth)
+              {
+                  if (   HelpfulMaster
+                      && Threads[i]->activePosition->state[basePly].key
+                             != activePosition->state[basePly].key)
+                      continue;
+                  split_depth = d;
+                  split_ply = ply;
+                  t = i;
+              }
+          }
+      }
 
-          Threads.mutex.lock();
+      if (split_depth == (Depth)0)
+      {
+          if (HelpfulMaster) {Threads.mutex.unlock();return false;}
+          else continue;
+      }
 
-          assert(searching);
-          assert(activeSplitPoint);
-          SplitPoint* sp = activeSplitPoint;
+      masterThread = Threads[t];
+      splitPoint = &masterThread->activePosition->state[split_ply];
 
-          Threads.mutex.unlock();
+      splitPoint->mutex.lock();
 
-          Stack stack[MAX_PLY_PLUS_6], *ss = stack+2; // To allow referencing (ss-2)
-          Position pos(*sp->pos, this);
+      // make sure the split point is still there
+      if (!(masterThread->splitPointMask & (1ULL << split_ply)))
+      {
+          splitPoint->mutex.unlock();
+          if (HelpfulMaster) {Threads.mutex.unlock();return false;}
+          continue;
+      }
 
-          std::memcpy(ss-2, sp->ss-2, 5 * sizeof(Stack));
-          ss->splitPoint = sp;
+      // we could try to fetch a move first, but too complicated for now
 
-          sp->mutex.lock();
+      break;
+  }
 
-          assert(activePosition == NULL);
+  if (HelpfulMaster)
+  {
+      for (int ply = 0; ply < basePly; ++ply)
+          if (masterThread->activePosition->state[ply + 1].move
+                  != activePosition->state[ply + 1].move)
+          {
+              Threads.mutex.unlock();
+              splitPoint->mutex.unlock();
+              return false;
+          }
+  }
 
-          activePosition = &pos;
+  // register this thread as slave
+  splitPoint->slavesMask |= 1ULL << idx;
+
+  Threads.mutex.unlock();
+
+  // copy moves from root to split point
+  Move path[64];
+  for (int ply = HelpfulMaster ? basePly : 0; ply < split_ply; ++ply)
+      path[ply] = masterThread->activePosition->state[ply + 1].move;
+
+  std::memcpy(searchStack-2 + split_ply,
+              masterThread->searchStack-2 + split_ply, 5 * sizeof(Stack));
+
+  splitPoint->mutex.unlock();
+
+  activeSplitPoint = splitPoint;
+  Position& pos = *activePosition;
+
+  int base = basePly;
+
+  if (!HelpfulMaster)
+  {
+      int ply, min_ply = std::min(split_ply, base);
+
+      for (ply = 0; ply < min_ply; ++ply)
+          if (path[ply] != pos.state[ply + 1].move)
+              break;
+
+      for (; base > ply; --base)
+          if (pos.state[base].move != MOVE_NULL)
+              pos.undo_move();
+          else
+              pos.undo_null_move();
+  }
+
+  for (; base < split_ply; ++base)
+      if (path[base] != MOVE_NULL)
+          pos.do_move(path[base], pos.state[base + 1]);
+      else
+          pos.do_null_move(pos.state[base + 1]);
+
+  basePly = base;
+
+  return true;
+}
+
+void Thread::idle_loop() {
+
+  Position& pos = *activePosition;
+
+  Stack stack[MAX_PLY_PLUS_6];
+  searchStack = stack + 2;
+
+  basePly = 0; // start at root
+
+  while (true)
+  {
+      mutex.lock();
+      sleepCondition.wait(mutex);
+      mutex.unlock();
+
+      while (searching)
+      {
+	  if (!find_split_point<false>())
+              continue;
+
+          StateInfo *sp = activeSplitPoint;
+          Stack *ss = searchStack + basePly;
 
           if (sp->nodeType == NonPV)
               search<NonPV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-
           else if (sp->nodeType == PV)
               search<PV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-
           else if (sp->nodeType == Root)
               search<Root, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
-
           else
               assert(false);
-
-          assert(searching);
-
-          searching = false;
-          activePosition = NULL;
-          sp->slavesMask.reset(idx);
-          sp->allSlavesSearching = false;
-          sp->nodes += pos.nodes_searched();
-
-          // Wake up the master thread so to allow it to return from the idle
-          // loop in case we are the last slave of the split point.
-          if (    this != sp->masterThread
-              &&  sp->slavesMask.none())
-          {
-              assert(!sp->masterThread->searching);
-              sp->masterThread->notify_one();
-          }
-
-          // After releasing the lock we can't access any SplitPoint related data
-          // in a safe way because it could have been released under our feet by
-          // the sp master.
-          sp->mutex.unlock();
-
-          // Try to late join to another split point if none of its slaves has
-          // already finished.
-          if (Threads.size() > 2)
-              for (size_t i = 0; i < Threads.size(); ++i)
-              {
-                  const int size = Threads[i]->splitPointsSize; // Local copy
-                  sp = size ? &Threads[i]->splitPoints[size - 1] : NULL;
-
-                  if (   sp
-                      && sp->allSlavesSearching
-                      && available_to(Threads[i]))
-                  {
-                      // Recheck the conditions under lock protection
-                      Threads.mutex.lock();
-                      sp->mutex.lock();
-
-                      if (   sp->allSlavesSearching
-                          && available_to(Threads[i]))
-                      {
-                           sp->slavesMask.set(idx);
-                           activeSplitPoint = sp;
-                           searching = true;
-                      }
-
-                      sp->mutex.unlock();
-                      Threads.mutex.unlock();
-
-                      break; // Just a single attempt
-                  }
-              }
-      }
-
-      // If this thread is the master of a split point and all slaves have finished
-      // their work at this split point, return from the idle loop.
-      if (this_sp && this_sp->slavesMask.none())
-      {
-          this_sp->mutex.lock();
-          bool finished = this_sp->slavesMask.none(); // Retest under lock protection
-          this_sp->mutex.unlock();
-          if (finished)
-              return;
       }
   }
 }
 
+void Thread::help_slaves(int ply) {
+
+  Thread *old_master = masterThread;
+  StateInfo *old_sp = activeSplitPoint;
+  int old_base = basePly;
+
+  basePly = ply - 1;
+
+  if (!find_split_point<true>())
+  {
+      basePly = old_base;
+      return;
+  }
+
+  Position& pos = *activePosition;
+  StateInfo *sp = activeSplitPoint;
+  Stack *ss = searchStack + basePly;
+
+  if (sp->nodeType == NonPV)
+      search<NonPV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+  else if (sp->nodeType == PV)
+      search<PV, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+  else if (sp->nodeType == Root)
+      search<Root, true>(pos, ss, sp->alpha, sp->beta, sp->depth, sp->cutNode);
+  else
+      assert(false);
+
+  for (; basePly > ply - 1; --basePly)
+      if (pos.state[basePly].move != MOVE_NULL)
+          pos.undo_move();
+      else
+          pos.undo_null_move();
+
+  masterThread = old_master;
+  activeSplitPoint = old_sp;
+  basePly = old_base;
+}
+
+void Thread::init_search_threads() {
+
+  for (size_t i = 1; i < Threads.size(); ++i)
+  {
+      *(Threads[i]->activePosition) = *(Threads[0]->activePosition);
+      Threads[i]->activePosition->set_thread(Threads[i]);
+  }
+
+  for (size_t i = 0; i < Threads.size(); ++i)
+  {
+      Threads[i]->splitPointMask = 0;
+  }
+
+  for (size_t i = 1; i < Threads.size(); ++i)
+  {
+      Threads[i]->searching = true;
+      Threads[i]->notify_one();
+  }
+}
 
 /// check_time() is called by the timer thread when the timer triggers. It is
 /// used to print debug info and, more importantly, to detect when we are out of
@@ -1615,29 +1830,11 @@ void check_time() {
 
   if (Limits.nodes)
   {
-      Threads.mutex.lock();
+      nodes = 0;
 
-      nodes = RootPos.nodes_searched();
-
-      // Loop across all split points and sum accumulated SplitPoint nodes plus
-      // all the currently active positions nodes.
+      // Loop over all threads.
       for (size_t i = 0; i < Threads.size(); ++i)
-          for (int j = 0; j < Threads[i]->splitPointsSize; ++j)
-          {
-              SplitPoint& sp = Threads[i]->splitPoints[j];
-
-              sp.mutex.lock();
-
-              nodes += sp.nodes;
-
-              for (size_t idx = 0; idx < Threads.size(); ++idx)
-                  if (sp.slavesMask.test(idx) && Threads[idx]->activePosition)
-                      nodes += Threads[idx]->activePosition->nodes_searched();
-
-              sp.mutex.unlock();
-          }
-
-      Threads.mutex.unlock();
+          nodes += Threads[i]->activePosition->nodes_searched();
   }
 
   Time::point elapsed = Time::now() - SearchTime;
@@ -1651,5 +1848,9 @@ void check_time() {
   if (   (Limits.use_time_management() && noMoreTime)
       || (Limits.movetime && elapsed >= Limits.movetime)
       || (Limits.nodes && nodes >= Limits.nodes))
+  {
       Signals.stop = true;
+      for (size_t i = 0; i < Threads.size(); ++i)
+          Threads[i]->abort = -1;
+  }
 }
