@@ -546,8 +546,25 @@ namespace {
     if (!RootNode)
     {
         // Step 2. Check for aborted search and immediate draw
-        if (Signals.stop || pos.is_draw() || ss->ply > MAX_PLY)
+        if (Signals.stop || pos.is_draw() || ss->ply > MAX_PLY)        {
+            if (pos.total_piece_count() <= TBCardinality)
+            {
+                int found, v = Tablebases::probe_wdl(pos, &found);
+
+                if (found)
+                {
+                    TBHits++;
+
+                    value = v < 0 ? -VALUE_MATE + MAX_PLY + ss->ply
+                          : v > 0 ?  VALUE_MATE - MAX_PLY - ss->ply
+                          : VALUE_DRAW;
+
+                    return value;
+                }
+            }
+
             return ss->ply > MAX_PLY && !inCheck ? evaluate(pos) : DrawValue[pos.side_to_move()];
+        }
 
         // Step 3. Mate distance pruning. Even if we mate at the next move our score
         // would be at best mate_in(ss->ply+1), but if alpha is already bigger because
@@ -592,10 +609,9 @@ namespace {
     }
 
     // Step 4a. Tablebase probe
+    // Step 4a. Tablebase probe
     if (   !RootNode
-        && pos.total_piece_count() <= TBCardinality
-        && ( pos.total_piece_count() < TBCardinality || depth >= TBProbeDepth )
-        && pos.rule50_count() == 0)
+        && pos.total_piece_count() <= TBCardinality)
     {
         int found, v = Tablebases::probe_wdl(pos, &found);
 
@@ -603,20 +619,12 @@ namespace {
         {
             TBHits++;
 
-            if (TB50MoveRule) {
-                value = v < -1 ? -VALUE_MATE + MAX_PLY + ss->ply
-                      : v >  1 ?  VALUE_MATE - MAX_PLY - ss->ply
-                      : VALUE_DRAW + 2 * v;
-            }
-            else
-            {
-                value = v < 0 ? -VALUE_MATE + MAX_PLY + ss->ply
-                      : v > 0 ?  VALUE_MATE - MAX_PLY - ss->ply
-                      : VALUE_DRAW;
-            }
+            value = v < 0 ? -VALUE_MATE + MAX_PLY + ss->ply
+                  : v > 0 ?  VALUE_MATE - MAX_PLY - ss->ply
+                  : VALUE_DRAW;
 
             TT.store(posKey, value_to_tt(value, ss->ply), BOUND_EXACT,
-                     depth + 6 * ONE_PLY, MOVE_NONE, VALUE_NONE);
+                     (Depth) 64 , MOVE_NONE, VALUE_NONE);
 
             return value;
         }
@@ -1163,7 +1171,28 @@ moves_loop: // When in check and at SpNode search starts from here
 
     // Check for an instant draw or if the maximum ply has been reached
     if (pos.is_draw() || ss->ply > MAX_PLY)
+    {
+        if (pos.total_piece_count() <= TBCardinality
+        && ((ss-1)->currentMove != MOVE_NULL && (ss-1)->currentMove != MOVE_NONE))
+        {
+            int found, v = Tablebases::probe_wdl(const_cast<Position&>(pos), &found);
+            Value value;
+
+            if (found)
+            {
+                value = v < 0 ? -VALUE_MATE + MAX_PLY + ss->ply
+                      : v > 0 ?  VALUE_MATE - MAX_PLY - ss->ply
+                      : VALUE_DRAW;
+
+                TT.store(pos.key(), value_to_tt(value, ss->ply), BOUND_EXACT,
+                         -depth + Depth (64), MOVE_NONE, value);
+
+                return value;
+            }
+          }
+
         return ss->ply > MAX_PLY && !InCheck ? evaluate(pos) : DrawValue[pos.side_to_move()];
+    }
 
     // Decide whether or not to include checks: this fixes also the type of
     // TT entry depth that we are going to use. Note that in qsearch we use
@@ -1187,6 +1216,26 @@ moves_loop: // When in check and at SpNode search starts from here
         ss->currentMove = ttMove; // Can be MOVE_NONE
         return ttValue;
     }
+
+    if (pos.total_piece_count() <= TBCardinality
+        && ((ss-1)->currentMove != MOVE_NULL && (ss-1)->currentMove != MOVE_NONE))
+    {
+        int found, v = Tablebases::probe_wdl(const_cast<Position&>(pos), &found);
+        Value value;
+
+        if (found)
+        {
+            value = v < 0 ? -VALUE_MATE + MAX_PLY + ss->ply
+                  : v > 0 ?  VALUE_MATE - MAX_PLY - ss->ply
+                  : VALUE_DRAW;
+
+            TT.store(pos.key(), value_to_tt(value, ss->ply), BOUND_EXACT,
+                     Depth (64), MOVE_NONE, VALUE_NONE);
+
+            return value;
+        }
+    }
+
 
     // Evaluate the position statically
     if (InCheck)
