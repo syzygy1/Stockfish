@@ -145,13 +145,7 @@ void MainThread::idle_loop() {
       if (exit)
           return;
 
-      searching = true;
-
       Search::think();
-
-      assert(searching);
-
-      searching = false;
   }
 }
 
@@ -197,6 +191,9 @@ void ThreadPool::read_uci_options() {
   // If zero (default) then set best minimum split depth automatically
   if (!minimumSplitDepth)
       minimumSplitDepth = requested < 8 ? 4 * ONE_PLY : 7 * ONE_PLY;
+
+  if (requested == 1)
+      minimumSplitDepth = MAX_PLY * ONE_PLY;
 
   while (size() < requested)
       push_back(new_thread<Thread>());

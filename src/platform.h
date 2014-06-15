@@ -54,6 +54,7 @@ inline int64_t system_time_to_msec() {
 
 #  include <pthread.h>
 typedef pthread_mutex_t Lock;
+typedef pthread_spinlock_t SpinLock;
 typedef pthread_cond_t WaitCondition;
 typedef pthread_t NativeHandle;
 typedef void*(*pt_start_fn)(void*);
@@ -63,6 +64,11 @@ typedef void*(*pt_start_fn)(void*);
 #  define lock_grab_try(x) pthread_mutex_trylock(&(x))
 #  define lock_release(x) pthread_mutex_unlock(&(x))
 #  define lock_destroy(x) pthread_mutex_destroy(&(x))
+#  define spinlock_init(x) pthread_spin_init(&(x), PTHREAD_PROCESS_PRIVATE)
+#  define spinlock_grab(x) pthread_spin_lock(&(x))
+#  define spinlock_grab_try(x) pthread_spin_trylock(&(x))
+#  define spinlock_release(x) pthread_spin_unlock(&(x))
+#  define spinlock_destroy(x) pthread_spin_destroy(&(x))
 #  define cond_destroy(x) pthread_cond_destroy(&(x))
 #  define cond_init(x) pthread_cond_init(&(x), NULL)
 #  define cond_signal(x) pthread_cond_signal(&(x))

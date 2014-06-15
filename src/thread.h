@@ -32,21 +32,6 @@
 const int MAX_THREADS = 128;
 const int MAX_SPLITPOINTS_PER_THREAD = 8;
 
-#if 0
-struct Mutex {
-  Mutex() { lock_init(l); }
- ~Mutex() { lock_destroy(l); }
-
-  void lock() { lock_grab(l); }
-  void unlock() { lock_release(l); }
-
-private:
-  friend struct ConditionVariable;
-
-  Lock l;
-};
-#endif
-
 struct ConditionVariable {
   ConditionVariable() { cond_init(c); }
  ~ConditionVariable() { cond_destroy(c); }
@@ -60,35 +45,6 @@ private:
 };
 
 struct Thread;
-
-#if 0
-struct SplitPoint {
-
-  // Const data after split point has been setup
-  const Position* pos;
-  const Search::Stack* ss;
-  Thread* masterThread;
-  Depth depth;
-  Value beta;
-  int nodeType;
-  bool cutNode;
-
-  // Const pointers to shared data
-  MovePicker* movePicker;
-  SplitPoint* parentSplitPoint;
-
-  // Shared data
-  Mutex mutex;
-  std::bitset<MAX_THREADS> slavesMask;
-  volatile bool allSlavesSearching;
-  volatile uint64_t nodes;
-  volatile Value alpha;
-  volatile Value bestValue;
-  volatile Move bestMove;
-  volatile int moveCount;
-  volatile bool cutoff;
-};
-#endif
 
 
 /// ThreadBase struct is the base of the hierarchy from where we derive all the
@@ -143,6 +99,7 @@ struct Thread : public ThreadBase {
   volatile uint64_t splitPointMask;
   volatile int abort;
   volatile bool searching;
+  volatile bool finished;
 };
 
 inline bool Thread::aborted() {

@@ -453,11 +453,13 @@ inline const std::string to_string(Square s) {
   return ch;
 }
 
-// ugly to define Mutex here, but to avoid circular inclusion of include files
+// Maybe ugly to define Mutex here, but necessary to avoid circular
+// inclusion of include files.
 struct Mutex {
   Mutex() { lock_init(l); }
  ~Mutex() { lock_destroy(l); }
 
+  void init() { lock_init(l); }
   void lock() { lock_grab(l); }
   bool trylock() { return lock_grab_try(l); }
   void unlock() { lock_release(l); }
@@ -466,6 +468,18 @@ private:
   friend struct ConditionVariable;
 
   Lock l;
+};
+
+struct SpinLockMutex {
+  SpinLockMutex() { spinlock_init(l); }
+ ~SpinLockMutex() { spinlock_destroy(l); }
+
+  void init() { spinlock_init(l); }
+  void lock() { spinlock_grab(l); }
+  bool trylock() { return spinlock_grab_try(l); }
+  void unlock() { spinlock_release(l); }
+
+  SpinLock l;
 };
 
 #endif // #ifndef TYPES_H_INCLUDED

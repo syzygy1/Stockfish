@@ -184,6 +184,9 @@ void Position::clear() {
   for (int i = 0; i < PIECE_TYPE_NB; ++i)
       for (int j = 0; j < 16; ++j)
           pieceList[WHITE][i][j] = pieceList[BLACK][i][j] = SQ_NONE;
+
+  for (int i = 0; i < MAX_PLY + 1; ++i)
+      state[i].mutex.init();
 }
 
 

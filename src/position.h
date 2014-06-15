@@ -65,7 +65,8 @@ struct StateInfo {
   // split point data
   MovePicker *movePicker;
   volatile uint64_t slavesMask;
-  Mutex mutex; // probably better to replace this by a spinlock
+  // Mutex mutex;
+  SpinLockMutex mutex;
   Depth depth;
   Value bestValue;
   volatile Value alpha;
@@ -222,7 +223,7 @@ private:
   bool chess960;
 
 public:
-  StateInfo state[MAX_PLY];
+  StateInfo state[MAX_PLY + 1];
 };
 
 inline uint64_t Position::nodes_searched() const {
