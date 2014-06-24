@@ -701,6 +701,7 @@ namespace {
 
         tte = TT.probe(posKey);
         ttMove = tte ? tte->move() : MOVE_NONE;
+        ttValue = tte ? value_from_tt(tte->value(), ss->ply) : VALUE_NONE;
     }
 
 moves_loop: // When in check and at SpNode search starts from here
@@ -1098,6 +1099,7 @@ moves_loop: // When in check and at SpNode search starts from here
           asm volatile("" ::: "memory");
           splitPoint->depth = depth;
           splitPoint->bestValue = bestValue;
+          if (PvNode) splitPoint->bestMove = bestMove;
           splitPoint->alpha = alpha;
           splitPoint->beta = beta;
           splitPoint->nodeType = NT;
@@ -1152,9 +1154,10 @@ aborted:
         if (tmp > bestValue)
         {
             bestValue = tmp;
-            if (bestValue > alpha)
-                bestMove = splitPoint->bestMove;
+            if (!PvNode && bestValue > alpha)
+                bestMove = splitPoint->bestMove; // FIXME; alpha often will have been updated already
         }
+        if (PvNode) bestMove = splitPoint->bestMove;
     }
 
     // Step 20. Check for mate and stalemate
@@ -1818,12 +1821,12 @@ void Thread::init_search_threads() {
   {
       Threads[i]->splitPointMask = 0;
       Threads[i]->basePly = 0;
+      Threads[i]->searching = true;
   }
 
   for (size_t i = 1; i < Threads.size(); ++i)
   {
       Threads[i]->finished = false;
-      Threads[i]->searching = true;
       Threads[i]->notify_one();
   }
 }
