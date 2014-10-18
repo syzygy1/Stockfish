@@ -85,6 +85,11 @@ struct Thread : public ThreadBase {
   void clear_splitpoint(int ply);
   static void abort_slaves(StateInfo* sp, int ply);
   static void clear_slave(StateInfo* sp, int idx);
+  bool cutoff_occurred() const;
+  bool available_to(const Thread* master) const;
+
+  void split(Position& pos, const Search::Stack* ss, Value alpha, Value beta, Value* bestValue, Move* bestMove,
+             Depth depth, int moveCount, MovePicker* movePicker, int nodeType, bool cutNode);
 
   Material::Table materialTable;
   Endgames endgames;

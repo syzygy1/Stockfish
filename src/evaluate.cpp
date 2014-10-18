@@ -79,13 +79,14 @@ namespace {
       MATERIAL = 8, IMBALANCE, MOBILITY, THREAT, PASSED, SPACE, TOTAL, TERMS_NB
     };
 
-    Score terms[COLOR_NB][TERMS_NB];
+    Score scores[COLOR_NB][TERMS_NB];
     EvalInfo ei;
     ScaleFactor sf;
 
     double to_cp(Value v);
-    void add_term(int idx, Score term_w, Score term_b = SCORE_ZERO);
-    void format_row(std::stringstream& ss, const char* name, int idx);
+    void write(int idx, Color c, Score s);
+    void write(int idx, Score w, Score b = SCORE_ZERO);
+    void print(std::stringstream& ss, const char* name, int idx);
     std::string do_trace(const Position& pos);
   }
 
@@ -150,23 +151,24 @@ namespace {
     S(0, 0), S(0, 0), S(80, 119), S(80, 119), S(117, 199), S(127, 218)
   };
 
-  // Hanging contains a bonus for each enemy hanging piece
-  const Score Hanging = S(23, 20);
-
-  #undef S
-
-  const Score RookOnPawn       = make_score(10, 28);
-  const Score RookOpenFile     = make_score(43, 21);
-  const Score RookSemiopenFile = make_score(19, 10);
-  const Score BishopPawns      = make_score( 8, 12);
-  const Score MinorBehindPawn  = make_score(16,  0);
-  const Score TrappedRook      = make_score(92,  0);
-  const Score Unstoppable      = make_score( 0, 20);
+  // Assorted bonuses and penalties used by evaluation
+  const Score KingOnOne        = S(2 , 58);
+  const Score KingOnMany       = S(6 ,125);
+  const Score RookOnPawn       = S(10, 28);
+  const Score RookOpenFile     = S(43, 21);
+  const Score RookSemiOpenFile = S(19, 10);
+  const Score BishopPawns      = S( 8, 12);
+  const Score MinorBehindPawn  = S(16,  0);
+  const Score TrappedRook      = S(92,  0);
+  const Score Unstoppable      = S( 0, 20);
+  const Score Hanging          = S(23, 20);
 
   // Penalty for a bishop on a1/h1 (a8/h8 for black) which is trapped by
   // a friendly pawn on b2/g2 (b7/g7 for black). This can obviously only
   // happen in Chess960 games.
-  const Score TrappedBishopA1H1 = make_score(50, 50);
+  const Score TrappedBishopA1H1 = S(50, 50);
+
+  #undef S
 
   // SpaceMask[Color] contains the area of the board which is considered
   // by the space evaluation. In the middlegame, each side is given a bonus
@@ -220,7 +222,7 @@ namespace {
     ei.attackedBy[Us][ALL_PIECES] = ei.attackedBy[Us][PAWN] = ei.pi->pawn_attacks(Us);
 
     // Init king safety tables only if we are going to use them
-    if (pos.count<QUEEN>(Us) && pos.non_pawn_material(Us) > QueenValueMg + PawnValueMg)
+    if (pos.non_pawn_material(Us) > QueenValueMg + PawnValueMg)
     {
         ei.kingRing[Them] = b | shift_bb<Down>(b);
         b &= ei.attackedBy[Us][PAWN];
@@ -255,7 +257,7 @@ namespace {
             bonus += bonus / 2;
     }
 
-    return make_score(bonus, bonus);
+    return make_score(bonus * 2, bonus / 2);
   }
 
 
@@ -338,7 +340,7 @@ namespace {
 
             // Give a bonus for a rook on a open or semi-open file
             if (ei.pi->semiopen_file(Us, file_of(s)))
-                score += ei.pi->semiopen_file(Them, file_of(s)) ? RookOpenFile : RookSemiopenFile;
+                score += ei.pi->semiopen_file(Them, file_of(s)) ? RookOpenFile : RookSemiOpenFile;
 
             if (mob > 3 || ei.pi->semiopen_file(Us, file_of(s)))
                 continue;
@@ -369,7 +371,7 @@ namespace {
     }
 
     if (Trace)
-        Tracing::terms[Us][Pt] = score;
+        Tracing::write(Pt, Us, score);
 
     return score - evaluate_pieces<NextPt, Them, Trace>(pos, ei, mobility, mobilityArea);
   }
@@ -413,7 +415,8 @@ namespace {
         attackUnits =  std::min(20, (ei.kingAttackersCount[Them] * ei.kingAttackersWeight[Them]) / 2)
                      + 3 * (ei.kingAdjacentZoneAttacksCount[Them] + popcount<Max15>(undefended))
                      + 2 * (ei.pinnedPieces[Us] != 0)
-                     - mg_value(score) / 32;
+                     - mg_value(score) / 32
+                     - !pos.count<QUEEN>(Them) * 15;
 
         // Analyse the enemy's safe queen contact checks. Firstly, find the
         // undefended squares around the king that are attacked by the enemy's
@@ -482,7 +485,7 @@ namespace {
     }
 
     if (Trace)
-        Tracing::terms[Us][KING] = score;
+        Tracing::write(KING, Us, score);
 
     return score;
   }
@@ -498,14 +501,15 @@ namespace {
 
     Bitboard b, weakEnemies, protectedEnemies;
     Score score = SCORE_ZERO;
+    enum { Minor, Major };
 
     // Protected enemies
     protectedEnemies = (pos.pieces(Them) ^ pos.pieces(Them,PAWN))
                       & ei.attackedBy[Them][PAWN]
                       & (ei.attackedBy[Us][KNIGHT] | ei.attackedBy[Us][BISHOP]);
 
-    if(protectedEnemies)
-        score += Threat[0][type_of(pos.piece_on(lsb(protectedEnemies)))];
+    if (protectedEnemies)
+        score += Threat[Minor][type_of(pos.piece_on(lsb(protectedEnemies)))];
 
     // Enemies not defended by a pawn and under our attack
     weakEnemies =  pos.pieces(Them)
@@ -517,19 +521,23 @@ namespace {
     {
         b = weakEnemies & (ei.attackedBy[Us][KNIGHT] | ei.attackedBy[Us][BISHOP]);
         if (b)
-            score += Threat[0][type_of(pos.piece_on(lsb(b)))];
+            score += Threat[Minor][type_of(pos.piece_on(lsb(b)))];
 
         b = weakEnemies & (ei.attackedBy[Us][ROOK] | ei.attackedBy[Us][QUEEN]);
         if (b)
-            score += Threat[1][type_of(pos.piece_on(lsb(b)))];
+            score += Threat[Major][type_of(pos.piece_on(lsb(b)))];
 
         b = weakEnemies & ~ei.attackedBy[Them][ALL_PIECES];
         if (b)
             score += more_than_one(b) ? Hanging * popcount<Max15>(b) : Hanging;
+
+        b = weakEnemies & ei.attackedBy[Us][KING];
+        if (b)
+            score += more_than_one(b) ? KingOnMany : KingOnOne;
     }
 
     if (Trace)
-        Tracing::terms[Us][Tracing::THREAT] = score;
+        Tracing::write(Tracing::THREAT, Us, score);
 
     return score;
   }
@@ -574,22 +582,18 @@ namespace {
             // If the pawn is free to advance, then increase the bonus
             if (pos.empty(blockSq))
             {
-                squaresToQueen = forward_bb(Us, s);
+                // If there is a rook or queen attacking/defending the pawn from behind,
+                // consider all the squaresToQueen. Otherwise consider only the squares
+                // in the pawn's path attacked or occupied by the enemy.
+                defendedSquares = unsafeSquares = squaresToQueen = forward_bb(Us, s);
 
-                // If there is an enemy rook or queen attacking the pawn from behind,
-                // add all X-ray attacks by the rook or queen. Otherwise consider only
-                // the squares in the pawn's path attacked or occupied by the enemy.
-                if (    unlikely(forward_bb(Them, s) & pos.pieces(Them, ROOK, QUEEN))
-                    && (forward_bb(Them, s) & pos.pieces(Them, ROOK, QUEEN) & pos.attacks_from<ROOK>(s)))
-                    unsafeSquares = squaresToQueen;
-                else
-                    unsafeSquares = squaresToQueen & (ei.attackedBy[Them][ALL_PIECES] | pos.pieces(Them));
+                Bitboard bb = forward_bb(Them, s) & pos.pieces(ROOK, QUEEN) & pos.attacks_from<ROOK>(s);
 
-                if (    unlikely(forward_bb(Them, s) & pos.pieces(Us, ROOK, QUEEN))
-                    && (forward_bb(Them, s) & pos.pieces(Us, ROOK, QUEEN) & pos.attacks_from<ROOK>(s)))
-                    defendedSquares = squaresToQueen;
-                else
-                    defendedSquares = squaresToQueen & ei.attackedBy[Us][ALL_PIECES];
+                if (!(pos.pieces(Us) & bb))
+                    defendedSquares &= ei.attackedBy[Us][ALL_PIECES];
+
+                if (!(pos.pieces(Them) & bb))
+                    unsafeSquares &= ei.attackedBy[Them][ALL_PIECES] | pos.pieces(Them);
 
                 // If there aren't any enemy attacks, assign a big bonus. Otherwise
                 // assign a smaller bonus if the block square isn't attacked.
@@ -605,6 +609,8 @@ namespace {
 
                 mbonus += k * rr, ebonus += k * rr;
             }
+            else if (pos.pieces(Us) & blockSq)
+                mbonus += rr * 3 + r * 2 + 3, ebonus += rr + r * 2;
         } // rr != 0
 
         if (pos.count<PAWN>(Us) < pos.count<PAWN>(Them))
@@ -614,20 +620,20 @@ namespace {
     }
 
     if (Trace)
-        Tracing::terms[Us][Tracing::PASSED] = apply_weight(score, Weights[PassedPawns]);
+        Tracing::write(Tracing::PASSED, Us, apply_weight(score, Weights[PassedPawns]));
 
     // Add the scores to the middlegame and endgame eval
     return apply_weight(score, Weights[PassedPawns]);
   }
 
 
-  // evaluate_unstoppable_pawns() scores the most advanced among the passed and
-  // candidate pawns. In case both players have no pieces but pawns, this is
-  // somewhat related to the possibility that pawns are unstoppable.
+  // evaluate_unstoppable_pawns() scores the most advanced passed pawn. In case
+  // both players have no pieces but pawns, this is somewhat related to the
+  // possibility that pawns are unstoppable.
 
   Score evaluate_unstoppable_pawns(Color us, const EvalInfo& ei) {
 
-    Bitboard b = ei.pi->passed_pawns(us) | ei.pi->candidate_pawns(us);
+    Bitboard b = ei.pi->passed_pawns(us);
 
     return b ? Unstoppable * int(relative_rank(us, frontmost_sq(us, b))) : SCORE_ZERO;
   }
@@ -688,7 +694,7 @@ namespace {
     // If we have a specialized evaluation function for the current material
     // configuration, call it and return.
     if (ei.mi->specialized_eval_exists())
-        return ei.mi->evaluate(pos);
+        return ei.mi->evaluate(pos) + Eval::Tempo;
 
     // Probe the pawn hash table
     ei.pi = Pawns::probe(pos, thisThread->pawnsTable);
@@ -775,20 +781,20 @@ namespace {
     // In case of tracing add all single evaluation contributions for both white and black
     if (Trace)
     {
-        Tracing::add_term(Tracing::MATERIAL, pos.psq_score());
-        Tracing::add_term(Tracing::IMBALANCE, ei.mi->material_value());
-        Tracing::add_term(PAWN, ei.pi->pawns_value());
-        Tracing::add_term(Tracing::MOBILITY, apply_weight(mobility[WHITE], Weights[Mobility])
-                                           , apply_weight(mobility[BLACK], Weights[Mobility]));
+        Tracing::write(Tracing::MATERIAL, pos.psq_score());
+        Tracing::write(Tracing::IMBALANCE, ei.mi->material_value());
+        Tracing::write(PAWN, ei.pi->pawns_value());
+        Tracing::write(Tracing::MOBILITY, apply_weight(mobility[WHITE], Weights[Mobility])
+                                        , apply_weight(mobility[BLACK], Weights[Mobility]));
         Score w = ei.mi->space_weight() * evaluate_space<WHITE>(pos, ei);
         Score b = ei.mi->space_weight() * evaluate_space<BLACK>(pos, ei);
-        Tracing::add_term(Tracing::SPACE, apply_weight(w, Weights[Space]), apply_weight(b, Weights[Space]));
-        Tracing::add_term(Tracing::TOTAL, score);
+        Tracing::write(Tracing::SPACE, apply_weight(w, Weights[Space]), apply_weight(b, Weights[Space]));
+        Tracing::write(Tracing::TOTAL, score);
         Tracing::ei = ei;
         Tracing::sf = sf;
     }
 
-    return pos.side_to_move() == WHITE ? v : -v;
+    return (pos.side_to_move() == WHITE ? v : -v) + Eval::Tempo;
   }
 
 
@@ -796,16 +802,18 @@ namespace {
 
   double Tracing::to_cp(Value v) { return double(v) / PawnValueEg; }
 
-  void Tracing::add_term(int idx, Score wScore, Score bScore) {
+  void Tracing::write(int idx, Color c, Score s) { scores[c][idx] = s; }
 
-    terms[WHITE][idx] = wScore;
-    terms[BLACK][idx] = bScore;
+  void Tracing::write(int idx, Score w, Score b) {
+
+    write(idx, WHITE, w);
+    write(idx, BLACK, b);
   }
 
-  void Tracing::format_row(std::stringstream& ss, const char* name, int idx) {
+  void Tracing::print(std::stringstream& ss, const char* name, int idx) {
 
-    Score wScore = terms[WHITE][idx];
-    Score bScore = terms[BLACK][idx];
+    Score wScore = scores[WHITE][idx];
+    Score bScore = scores[BLACK][idx];
 
     switch (idx) {
     case MATERIAL: case IMBALANCE: case PAWN: case TOTAL:
@@ -826,7 +834,7 @@ namespace {
 
   std::string Tracing::do_trace(const Position& pos) {
 
-    std::memset(terms, 0, sizeof(terms));
+    std::memset(scores, 0, sizeof(scores));
 
     Value v = do_evaluate<true>(pos);
     v = pos.side_to_move() == WHITE ? v : -v; // White's point of view
@@ -837,21 +845,21 @@ namespace {
        << "                |   MG    EG  |   MG    EG  |   MG    EG  \n"
        << "----------------+-------------+-------------+-------------\n";
 
-    format_row(ss, "Material", MATERIAL);
-    format_row(ss, "Imbalance", IMBALANCE);
-    format_row(ss, "Pawns", PAWN);
-    format_row(ss, "Knights", KNIGHT);
-    format_row(ss, "Bishops", BISHOP);
-    format_row(ss, "Rooks", ROOK);
-    format_row(ss, "Queens", QUEEN);
-    format_row(ss, "Mobility", MOBILITY);
-    format_row(ss, "King safety", KING);
-    format_row(ss, "Threats", THREAT);
-    format_row(ss, "Passed pawns", PASSED);
-    format_row(ss, "Space", SPACE);
+    print(ss, "Material", MATERIAL);
+    print(ss, "Imbalance", IMBALANCE);
+    print(ss, "Pawns", PAWN);
+    print(ss, "Knights", KNIGHT);
+    print(ss, "Bishops", BISHOP);
+    print(ss, "Rooks", ROOK);
+    print(ss, "Queens", QUEEN);
+    print(ss, "Mobility", MOBILITY);
+    print(ss, "King safety", KING);
+    print(ss, "Threats", THREAT);
+    print(ss, "Passed pawns", PASSED);
+    print(ss, "Space", SPACE);
 
     ss << "----------------+-------------+-------------+-------------\n";
-    format_row(ss, "Total", TOTAL);
+    print(ss, "Total", TOTAL);
 
     ss << "\nTotal Evaluation: " << to_cp(v) << " (white side)\n";
 
@@ -867,7 +875,7 @@ namespace Eval {
   /// of the position always from the point of view of the side to move.
 
   Value evaluate(const Position& pos) {
-    return do_evaluate<false>(pos) + Tempo;
+    return do_evaluate<false>(pos);
   }
 
 
