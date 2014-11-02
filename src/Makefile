@@ -35,7 +35,8 @@ endif
 BINDIR = $(PREFIX)/bin
 
 ### Built-in benchmark for pgo-builds
-PGOBENCH = ./$(EXE) bench 32 1 1 default time
+PGOBENCH = ( echo setoption value SyzygyPath value "$(SYZYGY-PATH)" ; \
+	echo bench 32 1 1 default time ) | ./$(EXE) 
 
 ### Object files
 OBJS = benchmark.o bitbase.o bitboard.o endgame.o evaluate.o main.o \
@@ -324,7 +325,7 @@ help:
 	@echo ""
 	@echo "To compile stockfish, type: "
 	@echo ""
-	@echo "make target ARCH=arch [COMP=comp]"
+	@echo "make target ARCH=arch [COMP=comp] [SYZYGY-PATH="Path to Syzygybases for PGO build"]"
 	@echo ""
 	@echo "Supported targets:"
 	@echo ""
