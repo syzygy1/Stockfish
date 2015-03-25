@@ -68,7 +68,7 @@ namespace {
         return;
 
     pos.set(fen, Options["UCI_Chess960"], Threads.main());
-    SetupStates = Search::StateStackPtr(new std::stack<StateInfo>());
+    SetupStates = Search::StateStackPtr(new std::stack<StateInfo>);
 
     // Parse move list (if any)
     while (is >> token && (m = UCI::to_move(pos, token)) != MOVE_NONE)
@@ -205,7 +205,7 @@ void UCI::loop(int argc, char* argv[]) {
 
   } while (token != "quit" && argc == 1); // Passed args have one-shot behaviour
 
-  Threads.wait_for_think_finished(); // Cannot quit whilst the search is running
+  Threads.main()->join(); // Cannot quit whilst the search is running
 }
 
 
