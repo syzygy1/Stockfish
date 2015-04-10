@@ -323,7 +323,7 @@ void ThreadPool::read_uci_options() {
 
   // If zero (default) then set best minimum split depth automatically
   if (!minimumSplitDepth)
-      minimumSplitDepth = requested < 8 ? 4 * ONE_PLY : 7 * ONE_PLY;
+      minimumSplitDepth =  5 * ONE_PLY ;
 
   while (size() < requested)
       push_back(new_thread<Thread>());
@@ -355,8 +355,6 @@ Thread* ThreadPool::available_slave(const SplitPoint* sp) const {
 void ThreadPool::start_thinking(const Position& pos, const LimitsType& limits,
                                 StateStackPtr& states) {
   main()->join();
-
-  SearchTime = now(); // As early as possible
 
   Signals.stopOnPonderhit = Signals.firstRootMove = false;
   Signals.stop = Signals.failedLowAtRoot = false;
