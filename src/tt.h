@@ -2,6 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
+  Copyright (C) 2015-2016 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -43,14 +44,22 @@ struct TTEntry {
 
   void save(Key k, Value v, Bound b, Depth d, Move m, Value ev, uint8_t g) {
 
-    if (m || (k >> 48) != key16) // Preserve any existing move for the same position
+    // Preserve any existing move for the same position
+    if (m || (k >> 48) != key16)
         move16 = (uint16_t)m;
 
-    key16     = (uint16_t)(k >> 48);
-    value16   = (int16_t)v;
-    eval16    = (int16_t)ev;
-    genBound8 = (uint8_t)(g | b);
-    depth8    = (int8_t)d;
+    // Don't overwrite more valuable entries
+    if (  (k >> 48) != key16
+        || d > depth8 - 4
+     /* || g != (genBound8 & 0xFC) // Matching non-zero keys are already refreshed by probe() */
+        || b == BOUND_EXACT)
+    {
+        key16     = (uint16_t)(k >> 48);
+        value16   = (int16_t)v;
+        eval16    = (int16_t)ev;
+        genBound8 = (uint8_t)(g | b);
+        depth8    = (int8_t)d;
+    }
   }
 
 private:
@@ -68,8 +77,9 @@ private:
 /// A TranspositionTable consists of a power of 2 number of clusters and each
 /// cluster consists of ClusterSize number of TTEntry. Each non-empty entry
 /// contains information of exactly one position. The size of a cluster should
-/// not be bigger than a cache line size. In case it is less, it should be padded
-/// to guarantee always aligned accesses.
+/// divide the size of a cache line size, to ensure that clusters never cross
+/// cache lines. This ensures best cache performance, as the cacheline is
+/// prefetched, as soon as possible.
 
 class TranspositionTable {
 
@@ -78,10 +88,10 @@ class TranspositionTable {
 
   struct Cluster {
     TTEntry entry[ClusterSize];
-    char padding[2]; // Align to the cache line size
+    char padding[2]; // Align to a divisor of the cache line size
   };
 
-  static_assert(sizeof(Cluster) == CacheLineSize / 2, "Cluster size incorrect");
+  static_assert(CacheLineSize % sizeof(Cluster) == 0, "Cluster size incorrect");
 
 public:
  ~TranspositionTable() { free(mem); }

@@ -2,6 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
+  Copyright (C) 2015-2016 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -33,58 +34,54 @@ namespace {
 /// DD-MM-YY and show in engine_info.
 const string Version = "";
 
-/// Debug counters
-int64_t hits[2], means[2];
-
 /// Our fancy logging facility. The trick here is to replace cin.rdbuf() and
 /// cout.rdbuf() with two Tie objects that tie cin and cout to a file stream. We
 /// can toggle the logging of std::cout and std:cin at runtime whilst preserving
-/// usual i/o functionality, all without changing a single line of code!
+/// usual I/O functionality, all without changing a single line of code!
 /// Idea from http://groups.google.com/group/comp.lang.c++/msg/1d941c0f26ea0d81
 
-struct Tie: public streambuf { // MSVC requires splitted streambuf for cin and cout
+struct Tie: public streambuf { // MSVC requires split streambuf for cin and cout
 
-  Tie(streambuf* b, ofstream* f) : buf(b), file(f) {}
+  Tie(streambuf* b, streambuf* l) : buf(b), logBuf(l) {}
 
-  int sync() { return file->rdbuf()->pubsync(), buf->pubsync(); }
+  int sync() { return logBuf->pubsync(), buf->pubsync(); }
   int overflow(int c) { return log(buf->sputc((char)c), "<< "); }
   int underflow() { return buf->sgetc(); }
   int uflow() { return log(buf->sbumpc(), ">> "); }
 
-  streambuf* buf;
-  ofstream* file;
+  streambuf *buf, *logBuf;
 
   int log(int c, const char* prefix) {
 
-    static int last = '\n';
+    static int last = '\n'; // Single log file
 
     if (last == '\n')
-        file->rdbuf()->sputn(prefix, 3);
+        logBuf->sputn(prefix, 3);
 
-    return last = file->rdbuf()->sputc((char)c);
+    return last = logBuf->sputc((char)c);
   }
 };
 
 class Logger {
 
-  Logger() : in(cin.rdbuf(), &file), out(cout.rdbuf(), &file) {}
- ~Logger() { start(false); }
+  Logger() : in(cin.rdbuf(), file.rdbuf()), out(cout.rdbuf(), file.rdbuf()) {}
+ ~Logger() { start(""); }
 
   ofstream file;
   Tie in, out;
 
 public:
-  static void start(bool b) {
+  static void start(const std::string& fname) {
 
     static Logger l;
 
-    if (b && !l.file.is_open())
+    if (!fname.empty() && !l.file.is_open())
     {
-        l.file.open("io_log.txt", ifstream::out | ifstream::app);
+        l.file.open(fname, ifstream::out);
         cin.rdbuf(&l.in);
         cout.rdbuf(&l.out);
     }
-    else if (!b && l.file.is_open())
+    else if (fname.empty() && l.file.is_open())
     {
         cout.rdbuf(l.out.buf);
         cin.rdbuf(l.in.buf);
@@ -117,13 +114,14 @@ const string engine_info(bool to_uci) {
   ss << (Is64Bit ? " 64" : "")
      << (HasPext ? " BMI2" : (HasPopCnt ? " POPCNT" : ""))
      << (to_uci  ? "\nid author ": " by ")
-     << "Tord Romstad, Marco Costalba and Joona Kiiski";
+     << "T. Romstad, M. Costalba, J. Kiiski, G. Linscott";
 
   return ss.str();
 }
 
 
 /// Debug functions used mainly to collect run-time statistics
+static int64_t hits[2], means[2];
 
 void dbg_hit_on(bool b) { ++hits[0]; if (b) ++hits[1]; }
 void dbg_hit_on(bool c, bool b) { if (c) dbg_hit_on(b); }
@@ -159,7 +157,7 @@ std::ostream& operator<<(std::ostream& os, SyncCout sc) {
 
 
 /// Trampoline helper to avoid moving Logger to misc.h
-void start_logger(bool b) { Logger::start(b); }
+void start_logger(const std::string& fname) { Logger::start(fname); }
 
 
 /// prefetch() preloads the given address in L1/L2 cache. This is a non-blocking

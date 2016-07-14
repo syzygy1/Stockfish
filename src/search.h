@@ -2,6 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
+  Copyright (C) 2015-2016 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -20,15 +21,15 @@
 #ifndef SEARCH_H_INCLUDED
 #define SEARCH_H_INCLUDED
 
-#include <memory>  // For std::auto_ptr
-#include <stack>
+#include <atomic>
 #include <vector>
 
 #include "misc.h"
 #include "position.h"
 #include "types.h"
 
-struct SplitPoint;
+template<typename T, bool CM> struct Stats;
+typedef Stats<Value, true> CounterMoveStats;
 
 namespace Search {
 
@@ -37,16 +38,15 @@ namespace Search {
 /// its own array of Stack objects, indexed by the current ply.
 
 struct Stack {
-  SplitPoint* splitPoint;
   Move* pv;
   int ply;
   Move currentMove;
-  Move ttMove;
   Move excludedMove;
   Move killers[2];
-  Depth reduction;
   Value staticEval;
   bool skipEarlyPruning;
+  int moveCount;
+  CounterMoveStats* counterMoves;
 };
 
 /// RootMove struct is used for moves at the root of the tree. For each root move
@@ -57,9 +57,8 @@ struct RootMove {
 
   explicit RootMove(Move m) : pv(1, m) {}
 
-  bool operator<(const RootMove& m) const { return score > m.score; } // Ascending sort
+  bool operator<(const RootMove& m) const { return m.score < score; } // Descending sort
   bool operator==(const Move& m) const { return pv[0] == m; }
-  void insert_pv_in_tt(Position& pos);
   bool extract_ponder_from_tt(Position& pos);
 
   Value score = -VALUE_INFINITE;
@@ -67,7 +66,7 @@ struct RootMove {
   std::vector<Move> pv;
 };
 
-typedef std::vector<RootMove> RootMoveVector;
+typedef std::vector<RootMove> RootMoves;
 
 /// LimitsType struct stores information sent by GUI about available time to
 /// search the current move, maximum depth/time, if we are in analysis mode or
@@ -76,8 +75,8 @@ typedef std::vector<RootMove> RootMoveVector;
 struct LimitsType {
 
   LimitsType() { // Init explicitly due to broken value-initialization of non POD in MSVC
-    nodes = time[WHITE] = time[BLACK] = inc[WHITE] = inc[BLACK] = npmsec = movestogo =
-    depth = movetime = mate = infinite = ponder = 0;
+    nodes = time[WHITE] = time[BLACK] = inc[WHITE] = inc[BLACK] =
+    npmsec = movestogo = depth = movetime = mate = infinite = ponder = 0;
   }
 
   bool use_time_management() const {
@@ -87,26 +86,22 @@ struct LimitsType {
   std::vector<Move> searchmoves;
   int time[COLOR_NB], inc[COLOR_NB], npmsec, movestogo, depth, movetime, mate, infinite, ponder;
   int64_t nodes;
+  TimePoint startTime;
 };
 
-/// The SignalsType struct stores volatile flags updated during the search
+/// The SignalsType struct stores atomic flags updated during the search
 /// typically in an async fashion e.g. to stop the search by the GUI.
 
 struct SignalsType {
-  bool stop, stopOnPonderhit, firstRootMove, failedLowAtRoot;
+  std::atomic_bool stop, stopOnPonderhit;
 };
 
-typedef std::unique_ptr<std::stack<StateInfo>> StateStackPtr;
-
-extern volatile SignalsType Signals;
+extern SignalsType Signals;
 extern LimitsType Limits;
-extern RootMoveVector RootMoves;
-extern Position RootPos;
-extern StateStackPtr SetupStates;
 
 void init();
-void think();
-template<bool Root> uint64_t perft(Position& pos, Depth depth);
+void clear();
+template<bool Root = true> uint64_t perft(Position& pos, Depth depth);
 
 } // namespace Search
 

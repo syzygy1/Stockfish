@@ -2,6 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
+  Copyright (C) 2015-2016 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -58,14 +59,13 @@
 /// _WIN32             Building on Windows (any)
 /// _WIN64             Building on Windows 64 bit
 
-#if defined(_WIN64) && !defined(IS_64BIT) // Last condition means Makefile is not used
-#  include <intrin.h> // MSVC popcnt and bsfq instrinsics
+#if defined(_WIN64) && defined(_MSC_VER) // No Makefile used
+#  include <intrin.h> // Microsoft header for _BitScanForward64()
 #  define IS_64BIT
-#  define USE_BSFQ
 #endif
 
-#if defined(USE_POPCNT) && defined(__INTEL_COMPILER) && defined(_MSC_VER)
-#  include <nmmintrin.h> // Intel header for _mm_popcnt_u64() intrinsic
+#if defined(USE_POPCNT) && (defined(__INTEL_COMPILER) || defined(_MSC_VER))
+#  include <nmmintrin.h> // Intel and Microsoft header for _mm_popcnt_u64()
 #endif
 
 #if !defined(NO_PREFETCH) && (defined(__INTEL_COMPILER) || defined(_MSC_VER))
@@ -77,14 +77,6 @@
 #  define pext(b, m) _pext_u64(b, m)
 #else
 #  define pext(b, m) (0)
-#endif
-
-#ifdef _MSC_VER
-#  define FORCE_INLINE  __forceinline
-#elif defined(__GNUC__)
-#  define FORCE_INLINE  inline __attribute__((always_inline))
-#else
-#  define FORCE_INLINE  inline
 #endif
 
 #ifdef USE_POPCNT
@@ -192,10 +184,10 @@ enum Value : int {
   VALUE_MATED_IN_MAX_PLY = -VALUE_MATE + 2 * MAX_PLY,
 
   PawnValueMg   = 198,   PawnValueEg   = 258,
-  KnightValueMg = 817,   KnightValueEg = 846,
-  BishopValueMg = 836,   BishopValueEg = 857,
-  RookValueMg   = 1270,  RookValueEg   = 1278,
-  QueenValueMg  = 2521,  QueenValueEg  = 2558,
+  KnightValueMg = 817,   KnightValueEg = 896,
+  BishopValueMg = 836,   BishopValueEg = 907,
+  RookValueMg   = 1270,  RookValueEg   = 1356,
+  QueenValueMg  = 2521,  QueenValueEg  = 2658,
 
   MidgameLimit  = 15581, EndgameLimit  = 3998
 };
@@ -362,7 +354,7 @@ inline Piece make_piece(Color c, PieceType pt) {
   return Piece((c << 3) | pt);
 }
 
-inline PieceType type_of(Piece pc)  {
+inline PieceType type_of(Piece pc) {
   return PieceType(pc & 7);
 }
 

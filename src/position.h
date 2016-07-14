@@ -2,6 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
+  Copyright (C) 2015-2016 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,16 +23,26 @@
 
 #include <cassert>
 #include <cstddef>  // For offsetof()
+#include <deque>
+#include <memory>   // For std::unique_ptr
 #include <string>
+#include <vector>
 
 #include "bitboard.h"
 #include "types.h"
 
 class Position;
-struct Thread;
+class Thread;
 
-/// CheckInfo struct is initialized at c'tor time and keeps info used to detect
-/// if a move gives check.
+namespace PSQT {
+
+  extern Score psq[COLOR_NB][PIECE_TYPE_NB][SQUARE_NB];
+
+  void init();
+}
+
+/// CheckInfo struct is initialized at constructor time and keeps info used to
+/// detect if a move gives check.
 
 struct CheckInfo {
 
@@ -39,7 +50,7 @@ struct CheckInfo {
 
   Bitboard dcCandidates;
   Bitboard pinned;
-  Bitboard checkSq[PIECE_TYPE_NB];
+  Bitboard checkSquares[PIECE_TYPE_NB];
   Square   ksq;
 };
 
@@ -67,6 +78,9 @@ struct StateInfo {
   StateInfo* previous;
 };
 
+// In a std::deque references to elements are unaffected upon resizing
+typedef std::unique_ptr<std::deque<StateInfo>> StateListPtr;
+
 
 /// Position class stores information regarding the board representation as
 /// pieces, side to move, hash keys, castling info, etc. Important methods are
@@ -75,19 +89,15 @@ struct StateInfo {
 
 class Position {
 
-  friend std::ostream& operator<<(std::ostream&, const Position&);
-
 public:
   static void init();
 
-  Position() = default; // To define the global object RootPos
+  Position() = default;
   Position(const Position&) = delete;
-  Position(const Position& pos, Thread* th) { *this = pos; thisThread = th; }
-  Position(const std::string& f, bool c960, Thread* th) { set(f, c960, th); }
-  Position& operator=(const Position&); // To assign RootPos from UCI
+  Position& operator=(const Position&) = delete;
 
   // FEN string input/output
-  void set(const std::string& fenStr, bool isChess960, Thread* th);
+  Position& set(const std::string& fenStr, bool isChess960, StateInfo* si, Thread* th);
   const std::string fen() const;
 
   // Position representation
@@ -98,11 +108,11 @@ public:
   Bitboard pieces(Color c, PieceType pt) const;
   Bitboard pieces(Color c, PieceType pt1, PieceType pt2) const;
   Piece piece_on(Square s) const;
-  Square king_square(Color c) const;
   Square ep_square() const;
   bool empty(Square s) const;
   template<PieceType Pt> int count(Color c) const;
-  template<PieceType Pt> const Square* list(Color c) const;
+  template<PieceType Pt> const Square* squares(Color c) const;
+  template<PieceType Pt> Square square(Color c) const;
 
   // Castling
   int can_castle(Color c) const;
@@ -121,6 +131,7 @@ public:
   Bitboard attacks_from(Piece pc, Square s) const;
   template<PieceType> Bitboard attacks_from(Square s) const;
   template<PieceType> Bitboard attacks_from(Square s, Color c) const;
+  Bitboard slider_blockers(Bitboard target, Bitboard sliders, Square s) const;
 
   // Properties of moves
   bool legal(Move m, Bitboard pinned) const;
@@ -134,7 +145,6 @@ public:
 
   // Piece specific
   bool pawn_passed(Color c, Square s) const;
-  bool pawn_on_7th(Color c) const;
   bool opposite_bishops() const;
 
   // Doing and undoing moves
@@ -173,12 +183,10 @@ public:
 
 private:
   // Initialization helpers (used while setting up a position)
-  void clear();
   void set_castling_right(Color c, Square rfrom);
   void set_state(StateInfo* si) const;
 
   // Other helpers
-  Bitboard check_blockers(Color c, Color kingColor) const;
   void put_piece(Color c, PieceType pt, Square s);
   void remove_piece(Color c, PieceType pt, Square s);
   void move_piece(Color c, PieceType pt, Square from, Square to);
@@ -195,7 +203,6 @@ private:
   int castlingRightsMask[SQUARE_NB];
   Square castlingRookSquare[CASTLING_RIGHT_NB];
   Bitboard castlingPath[CASTLING_RIGHT_NB];
-  StateInfo startState;
   uint64_t nodes;
   int gamePly;
   Color sideToMove;
@@ -203,6 +210,8 @@ private:
   StateInfo* st;
   bool chess960;
 };
+
+extern std::ostream& operator<<(std::ostream& os, const Position& pos);
 
 inline Color Position::side_to_move() const {
   return sideToMove;
@@ -248,12 +257,13 @@ template<PieceType Pt> inline int Position::count(Color c) const {
   return pieceCount[c][Pt];
 }
 
-template<PieceType Pt> inline const Square* Position::list(Color c) const {
+template<PieceType Pt> inline const Square* Position::squares(Color c) const {
   return pieceList[c][Pt];
 }
 
-inline Square Position::king_square(Color c) const {
-  return pieceList[c][KING][0];
+template<PieceType Pt> inline Square Position::square(Color c) const {
+  assert(pieceCount[c][Pt] == 1);
+  return pieceList[c][Pt][0];
 }
 
 inline Square Position::ep_square() const {
@@ -301,11 +311,11 @@ inline Bitboard Position::checkers() const {
 }
 
 inline Bitboard Position::discovered_check_candidates() const {
-  return check_blockers(sideToMove, ~sideToMove);
+  return slider_blockers(pieces(sideToMove), pieces(sideToMove), square<KING>(~sideToMove));
 }
 
 inline Bitboard Position::pinned_pieces(Color c) const {
-  return check_blockers(c, c);
+  return slider_blockers(pieces(c), pieces(~c), square<KING>(c));
 }
 
 inline bool Position::pawn_passed(Color c, Square s) const {
@@ -356,11 +366,7 @@ inline void Position::set_nodes_searched(uint64_t n) {
 inline bool Position::opposite_bishops() const {
   return   pieceCount[WHITE][BISHOP] == 1
         && pieceCount[BLACK][BISHOP] == 1
-        && opposite_colors(pieceList[WHITE][BISHOP][0], pieceList[BLACK][BISHOP][0]);
-}
-
-inline bool Position::pawn_on_7th(Color c) const {
-  return pieces(c, PAWN) & rank_bb(relative_rank(c, RANK_7));
+        && opposite_colors(square<BISHOP>(WHITE), square<BISHOP>(BLACK));
 }
 
 inline bool Position::is_chess960() const {

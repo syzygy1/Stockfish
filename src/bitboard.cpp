@@ -2,6 +2,7 @@
   Stockfish, a UCI chess playing engine derived from Glaurung 2.1
   Copyright (C) 2004-2008 Tord Romstad (Glaurung author)
   Copyright (C) 2008-2015 Marco Costalba, Joona Kiiski, Tord Romstad
+  Copyright (C) 2015-2016 Marco Costalba, Joona Kiiski, Gary Linscott, Tord Romstad
 
   Stockfish is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -18,12 +19,11 @@
 */
 
 #include <algorithm>
-#include <cstring>   // For std::memset
 
 #include "bitboard.h"
-#include "bitcount.h"
 #include "misc.h"
 
+uint8_t PopCnt16[1 << 16];
 int SquareDistance[SQUARE_NB][SQUARE_NB];
 
 Bitboard  RookMasks  [SQUARE_NB];
@@ -56,7 +56,7 @@ namespace {
   const uint64_t DeBruijn64 = 0x3F79D71B4CB0A89ULL;
   const uint32_t DeBruijn32 = 0x783A9B23;
 
-  int MS1BTable[256];           // To implement software msb()
+  int MSBTable[256];            // To implement software msb()
   Square BSFTable[SQUARE_NB];   // To implement software bitscan
   Bitboard RookTable[0x19000];  // To store rook attacks
   Bitboard BishopTable[0x1480]; // To store bishop attacks
@@ -69,23 +69,35 @@ namespace {
   // bsf_index() returns the index into BSFTable[] to look up the bitscan. Uses
   // Matt Taylor's folding for 32 bit case, extended to 64 bit by Kim Walisch.
 
-  FORCE_INLINE unsigned bsf_index(Bitboard b) {
+  unsigned bsf_index(Bitboard b) {
     b ^= b - 1;
     return Is64Bit ? (b * DeBruijn64) >> 58
                    : ((unsigned(b) ^ unsigned(b >> 32)) * DeBruijn32) >> 26;
   }
+
+
+  // popcount16() counts the non-zero bits using SWAR-Popcount algorithm
+
+  unsigned popcount16(unsigned u) {
+    u -= (u >> 1) & 0x5555U;
+    u = ((u >> 2) & 0x3333U) + (u & 0x3333U);
+    u = ((u >> 4) + u) & 0x0F0FU;
+    return (u * 0x0101U) >> 8;
+  }
 }
 
-#ifndef USE_BSFQ
+#ifdef NO_BSF
 
 /// Software fall-back of lsb() and msb() for CPU lacking hardware support
 
 Square lsb(Bitboard b) {
+  assert(b);
   return BSFTable[bsf_index(b)];
 }
 
 Square msb(Bitboard b) {
 
+  assert(b);
   unsigned b32;
   int result = 0;
 
@@ -109,10 +121,10 @@ Square msb(Bitboard b) {
       result += 8;
   }
 
-  return Square(result + MS1BTable[b32]);
+  return Square(result + MSBTable[b32]);
 }
 
-#endif // ifndef USE_BSFQ
+#endif // ifdef NO_BSF
 
 
 /// Bitboards::pretty() returns an ASCII representation of a bitboard suitable
@@ -125,9 +137,9 @@ const std::string Bitboards::pretty(Bitboard b) {
   for (Rank r = RANK_8; r >= RANK_1; --r)
   {
       for (File f = FILE_A; f <= FILE_H; ++f)
-          s.append(b & make_square(f, r) ? "| X " : "|   ");
+          s += b & make_square(f, r) ? "| X " : "|   ";
 
-      s.append("|\n+---+---+---+---+---+---+---+---+\n");
+      s += "|\n+---+---+---+---+---+---+---+---+\n";
   }
 
   return s;
@@ -139,14 +151,17 @@ const std::string Bitboards::pretty(Bitboard b) {
 
 void Bitboards::init() {
 
+  for (unsigned i = 0; i < (1 << 16); ++i)
+      PopCnt16[i] = (uint8_t) popcount16(i);
+
   for (Square s = SQ_A1; s <= SQ_H8; ++s)
   {
       SquareBB[s] = 1ULL << s;
       BSFTable[bsf_index(SquareBB[s])] = s;
   }
 
-  for (Bitboard b = 1; b < 256; ++b)
-      MS1BTable[b] = more_than_one(b) ? MS1BTable[b - 1] : lsb(b);
+  for (Bitboard b = 2; b < 256; ++b)
+      MSBTable[b] = MSBTable[b - 1] + !more_than_one(b);
 
   for (File f = FILE_A; f <= FILE_H; ++f)
       FileBB[f] = f > FILE_A ? FileBB[f - 1] << 1 : FileABB;
@@ -201,17 +216,15 @@ void Bitboards::init() {
       PseudoAttacks[QUEEN][s1]  = PseudoAttacks[BISHOP][s1] = attacks_bb<BISHOP>(s1, 0);
       PseudoAttacks[QUEEN][s1] |= PseudoAttacks[  ROOK][s1] = attacks_bb<  ROOK>(s1, 0);
 
-      for (Square s2 = SQ_A1; s2 <= SQ_H8; ++s2)
-      {
-          Piece pc = (PseudoAttacks[BISHOP][s1] & s2) ? W_BISHOP :
-                     (PseudoAttacks[ROOK][s1]   & s2) ? W_ROOK   : NO_PIECE;
+      for (Piece pc = W_BISHOP; pc <= W_ROOK; ++pc)
+          for (Square s2 = SQ_A1; s2 <= SQ_H8; ++s2)
+          {
+              if (!(PseudoAttacks[pc][s1] & s2))
+                  continue;
 
-          if (pc == NO_PIECE)
-              continue;
-
-          LineBB[s1][s2] = (attacks_bb(pc, s1, 0) & attacks_bb(pc, s2, 0)) | s1 | s2;
-          BetweenBB[s1][s2] = attacks_bb(pc, s1, SquareBB[s2]) & attacks_bb(pc, s2, SquareBB[s1]);
-      }
+              LineBB[s1][s2] = (attacks_bb(pc, s1, 0) & attacks_bb(pc, s2, 0)) | s1 | s2;
+              BetweenBB[s1][s2] = attacks_bb(pc, s1, SquareBB[s2]) & attacks_bb(pc, s2, SquareBB[s1]);
+          }
   }
 }
 
@@ -249,9 +262,7 @@ namespace {
                              {  728, 10316, 55013, 32803, 12281, 15100,  16645,   255 } };
 
     Bitboard occupancy[4096], reference[4096], edges, b;
-    int age[4096], current = 0, i, size;
-
-    std::memset(age, 0, sizeof(age));
+    int age[4096] = {0}, current = 0, i, size;
 
     // attacks[s] is a pointer to the beginning of the attacks table for square 's'
     attacks[SQ_A1] = table;
@@ -267,7 +278,7 @@ namespace {
         // the number of 1s of the mask. Hence we deduce the size of the shift to
         // apply to the 64 or 32 bits word to get the index.
         masks[s]  = sliding_attack(deltas, s, 0) & ~edges;
-        shifts[s] = (Is64Bit ? 64 : 32) - popcount<Max15>(masks[s]);
+        shifts[s] = (Is64Bit ? 64 : 32) - popcount(masks[s]);
 
         // Use Carry-Rippler trick to enumerate all subsets of masks[s] and
         // store the corresponding sliding attack bitboard in reference[].
@@ -298,7 +309,7 @@ namespace {
         do {
             do
                 magics[s] = rng.sparse_rand<Bitboard>();
-            while (popcount<Max15>((magics[s] * masks[s]) >> 56) < 6);
+            while (popcount((magics[s] * masks[s]) >> 56) < 6);
 
             // A good magic must map every possible occupancy to an index that
             // looks up the correct sliding attack in the attacks[s] database.
