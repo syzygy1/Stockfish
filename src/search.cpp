@@ -65,7 +65,7 @@ namespace {
 
   // Razoring and futility margin based on depth
   const int razor_margin[4] = { 483, 570, 603, 554 };
-  Value futility_margin(Depth d) { return Value(200 * d); }
+  Value futility_margin(Depth d) { return Value(150 * d); }
 
   // Futility and reductions lookup tables, initialized at startup
   int FutilityMoveCounts[2][16];  // [improving][depth]
@@ -213,6 +213,7 @@ void Search::clear() {
   {
       th->history.clear();
       th->counterMoves.clear();
+      th->fromTo.clear();
   }
 
   Threads.main()->previousScore = VALUE_INFINITE;
@@ -729,9 +730,8 @@ namespace {
 
     // Step 8. Null move search with verification search (is omitted in PV nodes)
     if (   !PvNode
-        &&  depth >= 2 * ONE_PLY
         &&  eval >= beta
-        && (ss->staticEval >= beta || depth >= 12 * ONE_PLY)
+        && (ss->staticEval >= beta - 35 * (depth / ONE_PLY - 6) || depth >= 13 * ONE_PLY)
         &&  pos.non_pawn_material(pos.side_to_move()))
     {
         ss->currentMove = MOVE_NULL;
@@ -927,12 +927,19 @@ moves_loop: // When in check search starts from here
 
           // Futility pruning: parent node
           if (   predictedDepth < 7 * ONE_PLY
-              && ss->staticEval + futility_margin(predictedDepth) + 256 <= alpha)
+              && ss->staticEval + 256 + 200 * predictedDepth / ONE_PLY <= alpha)
               continue;
 
-          // Prune moves with negative SEE at low depths
-          if (predictedDepth < 4 * ONE_PLY && pos.see_sign(move) < VALUE_ZERO)
-              continue;
+          // Prune moves with negative SEE at low depths and below a decreasing
+          // threshold at higher depths.
+          if (predictedDepth < 8 * ONE_PLY)
+          {
+              Value see_v = predictedDepth < 4 * ONE_PLY ? VALUE_ZERO
+                            : -PawnValueMg * 2 * int(predictedDepth - 3 * ONE_PLY);
+
+              if (pos.see_sign(move) < see_v)
+                  continue;
+          }
       }
 
       // Speculative prefetch as early as possible
@@ -961,7 +968,8 @@ moves_loop: // When in check search starts from here
           Value val = thisThread->history[moved_piece][to_sq(move)]
                      +    (cmh  ? (*cmh )[moved_piece][to_sq(move)] : VALUE_ZERO)
                      +    (fmh  ? (*fmh )[moved_piece][to_sq(move)] : VALUE_ZERO)
-                     +    (fmh2 ? (*fmh2)[moved_piece][to_sq(move)] : VALUE_ZERO);
+                     +    (fmh2 ? (*fmh2)[moved_piece][to_sq(move)] : VALUE_ZERO)
+                     +    thisThread->fromTo.get(~pos.side_to_move(), move);
 
           // Increase reduction for cut nodes
           if (cutNode)
@@ -1389,7 +1397,8 @@ moves_loop: // When in check search starts from here
         ss->killers[1] = ss->killers[0];
         ss->killers[0] = move;
     }
-
+	
+    Color c = pos.side_to_move();
     Value bonus = Value((depth / ONE_PLY) * (depth / ONE_PLY) + 2 * depth / ONE_PLY - 2);
 
     Square prevSq = to_sq((ss-1)->currentMove);
@@ -1399,6 +1408,7 @@ moves_loop: // When in check search starts from here
     Thread* thisThread = pos.this_thread();
 
     thisThread->history.update(pos.moved_piece(move), to_sq(move), bonus);
+    thisThread->fromTo.update(c, move, bonus);
 
     if (cmh)
     {
@@ -1416,6 +1426,7 @@ moves_loop: // When in check search starts from here
     for (int i = 0; i < quietsCnt; ++i)
     {
         thisThread->history.update(pos.moved_piece(quiets[i]), to_sq(quiets[i]), -bonus);
+        thisThread->fromTo.update(c, quiets[i], -bonus);
 
         if (cmh)
             cmh->update(pos.moved_piece(quiets[i]), to_sq(quiets[i]), -bonus);
