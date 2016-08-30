@@ -62,11 +62,12 @@ OBJS = benchmark.o bitbase.o bitboard.o endgame.o evaluate.o main.o \
 ### 2.1. General and architecture defaults
 optimize = yes
 debug = no
-bits = 32
-prefetch = no
-popcnt = no
-sse = no
+bits = 64
+prefetch = yes
+popcnt = yes
+sse = yes
 pext = no
+arch = x86_64
 
 ### 2.2 Architecture specific
 
@@ -319,7 +320,7 @@ endif
 ifeq ($(comp),gcc)
 	ifeq ($(optimize),yes)
 	ifeq ($(debug),no)
-		CXXFLAGS += -flto
+		CXXFLAGS += #-flto
 		LDFLAGS += $(CXXFLAGS)
 	endif
 	endif
