@@ -725,8 +725,8 @@ namespace {
     // Step 6. Razoring (skipped when in check)
     if (   !PvNode
         &&  depth < 4 * ONE_PLY
-        &&  eval + razor_margin[depth / ONE_PLY] <= alpha
-        &&  ttMove == MOVE_NONE)
+        &&  ttMove == MOVE_NONE
+        &&  eval + razor_margin[depth / ONE_PLY] <= alpha)
     {
         if (   depth <= ONE_PLY
             && eval + razor_margin[3 * ONE_PLY] <= alpha)
@@ -924,8 +924,8 @@ moves_loop: // When in check search starts from here
           && !captureOrPromotion
           && !inCheck
           && !givesCheck
-          && !pos.advanced_pawn_push(move)
-          &&  bestValue > VALUE_MATED_IN_MAX_PLY)
+          &&  bestValue > VALUE_MATED_IN_MAX_PLY
+          && !pos.advanced_pawn_push(move))
       {
           // Move count based pruning
           if (moveCountPruning)
@@ -935,7 +935,6 @@ moves_loop: // When in check search starts from here
 
           // Countermoves based pruning
           if (   predictedDepth < 3 * ONE_PLY
-              && move != ss->killers[0]
               && (!cmh  || (*cmh )[moved_piece][to_sq(move)] < VALUE_ZERO)
               && (!fmh  || (*fmh )[moved_piece][to_sq(move)] < VALUE_ZERO)
               && (!fmh2 || (*fmh2)[moved_piece][to_sq(move)] < VALUE_ZERO || (cmh && fmh)))
