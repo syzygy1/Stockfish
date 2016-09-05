@@ -29,8 +29,7 @@
 
 ThreadPool Threads; // Global object
 
-/// Thread constructor launches the thread and then waits until it goes to sleep
-/// in idle_loop().
+/// Thread constructor
 
 Thread::Thread() {
 
@@ -39,13 +38,7 @@ Thread::Thread() {
   history.clear();
   counterMoves.clear();
   idx = Threads.size(); // Start from 0
-
-  std::unique_lock<Mutex> lk(mutex);
-  searching = true;
-  nativeThread = std::thread(&Thread::idle_loop, this);
-  sleepCondition.wait(lk, [&]{ return !searching; });
 }
-
 
 /// Thread destructor waits for thread termination before returning
 
@@ -122,8 +115,38 @@ void Thread::idle_loop() {
 
 void ThreadPool::init() {
 
-  push_back(new MainThread);
+  launch_thread(true);
   read_uci_options();
+}
+
+
+/// ThreadPool::launch() launches a new thread from the UI thread
+
+void ThreadPool::launch_thread(bool is_main) {
+
+  initializing = true;
+  std::unique_lock<Mutex> lk(mutex);
+  std::thread nativeThread = std::thread(&ThreadPool::init_thread, this, is_main);
+  sleepCondition.wait(lk, [&]{ return !initializing; });
+
+  // The nativeThread member is only accessed from the UI thread, so
+  // there is no need to let the search thread wait for it to be set.
+  back()->nativeThread = std::move(nativeThread);
+}
+
+
+/// ThreadPool::init_thread() is run by the search thread. It initializes
+/// a Thread object and goes to sleep in Thread::idle_loop().
+
+void ThreadPool::init_thread(bool is_main) {
+
+  std::unique_lock<Mutex> lk(mutex);
+  push_back(is_main ? new MainThread : new Thread);
+  initializing = false;
+  sleepCondition.notify_one();
+  lk.unlock();
+
+  back()->idle_loop();
 }
 
 
@@ -149,7 +172,7 @@ void ThreadPool::read_uci_options() {
   assert(requested > 0);
 
   while (size() < requested)
-      push_back(new Thread);
+      launch_thread(false);
 
   while (size() > requested)
       delete back(), pop_back();

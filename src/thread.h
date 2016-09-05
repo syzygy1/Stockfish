@@ -43,7 +43,6 @@
 
 class Thread {
 
-  std::thread nativeThread;
   Mutex mutex;
   ConditionVariable sleepCondition;
   bool exit, searching;
@@ -62,6 +61,8 @@ public:
   Endgames endgames;
   size_t idx, PVIdx;
   int maxPly, callsCnt;
+
+  std::thread nativeThread;
 
   Position rootPos;
   Search::RootMoves rootMoves;
@@ -95,11 +96,17 @@ struct ThreadPool : public std::vector<Thread*> {
   void exit(); // be initialized and valid during the whole thread lifetime.
 
   MainThread* main() { return static_cast<MainThread*>(at(0)); }
+  void launch_thread(bool is_main);
+  void init_thread(bool is_main);
   void start_thinking(Position&, StateListPtr&, const Search::LimitsType&);
   void read_uci_options();
   int64_t nodes_searched();
 
 private:
+  Mutex mutex;
+  ConditionVariable sleepCondition;
+  bool initializing;
+
   StateListPtr setupStates;
 };
 
