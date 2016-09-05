@@ -37,6 +37,7 @@ Thread::Thread() {
   maxPly = callsCnt = 0;
   history.clear();
   counterMoves.clear();
+  fromTo.clear();
   idx = Threads.size(); // Start from 0
 }
 
