@@ -141,8 +141,8 @@ void ThreadPool::launch_thread(bool is_main) {
 
 void ThreadPool::init_thread(bool is_main) {
 
-  std::unique_lock<Mutex> lk(mutex);
   push_back(is_main ? new MainThread : new Thread);
+  std::unique_lock<Mutex> lk(mutex);
   initializing = false;
   sleepCondition.notify_one();
   lk.unlock();
