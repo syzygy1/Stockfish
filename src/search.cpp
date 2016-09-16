@@ -157,7 +157,6 @@ namespace {
 
   EasyMoveManager EasyMove;
   Value DrawValue[COLOR_NB];
-  CounterMoveHistoryStats CounterMoveHistory;
 
   template <NodeType NT>
   Value search(Position& pos, Stack* ss, Value alpha, Value beta, Depth depth, bool cutNode);
@@ -208,13 +207,13 @@ void Search::init() {
 void Search::clear() {
 
   TT.clear();
-  CounterMoveHistory.clear();
 
   for (Thread* th : Threads)
   {
       th->history.clear();
       th->counterMoves.clear();
       th->fromTo.clear();
+      th->counterMoveHistory.clear();
   }
 
   Threads.main()->previousScore = VALUE_INFINITE;
@@ -560,7 +559,7 @@ namespace {
     TTEntry* tte;
     Key posKey;
     Move ttMove, move, excludedMove, bestMove;
-    Depth extension, newDepth, predictedDepth;
+    Depth extension, newDepth;
     Value bestValue, value, ttValue, eval, nullValue;
     bool ttHit, inCheck, givesCheck, singularExtensionNode, improving;
     bool captureOrPromotion, doFullDepthSearch, moveCountPruning;
@@ -807,7 +806,7 @@ namespace {
             if (pos.legal(move))
             {
                 ss->currentMove = move;
-                ss->counterMoves = &CounterMoveHistory[pos.moved_piece(move)][to_sq(move)];
+                ss->counterMoves = &thisThread->counterMoveHistory[pos.moved_piece(move)][to_sq(move)];
                 pos.do_move(move, st, pos.gives_check(move));
                 value = -search<NonPV>(pos, ss+1, -rbeta, -rbeta+1, rdepth, !cutNode);
                 pos.undo_move(move);
@@ -921,8 +920,8 @@ moves_loop: // When in check search starts from here
 
       // Step 13. Pruning at shallow depth
       if (  !rootNode
-         && !inCheck
-         &&  bestValue > VALUE_MATED_IN_MAX_PLY)
+          && !inCheck
+          &&  bestValue > VALUE_MATED_IN_MAX_PLY)
       {
           if (   !captureOrPromotion
               && !givesCheck
@@ -932,35 +931,29 @@ moves_loop: // When in check search starts from here
               if (moveCountPruning)
                   continue;
 
-              predictedDepth = std::max(newDepth - reduction<PvNode>(improving, depth, moveCount), DEPTH_ZERO);
+              // Reduced depth of the next LMR search
+              int lmrDepth = std::max(newDepth - reduction<PvNode>(improving, depth, moveCount), DEPTH_ZERO) / ONE_PLY;
 
               // Countermoves based pruning
-              if (   predictedDepth < 3 * ONE_PLY
+              if (   lmrDepth < 3
                   && (!cmh  || (*cmh )[moved_piece][to_sq(move)] < VALUE_ZERO)
                   && (!fmh  || (*fmh )[moved_piece][to_sq(move)] < VALUE_ZERO)
                   && (!fmh2 || (*fmh2)[moved_piece][to_sq(move)] < VALUE_ZERO || (cmh && fmh)))
                   continue;
 
               // Futility pruning: parent node
-              if (   predictedDepth < 7 * ONE_PLY
-                  && ss->staticEval + 256 + 200 * predictedDepth / ONE_PLY <= alpha)
+              if (   lmrDepth < 7
+                  && ss->staticEval + 256 + 200 * lmrDepth <= alpha)
                   continue;
 
-              // Prune moves with negative SEE at low depths and below a decreasing
-              // threshold at higher depths.
-              if (predictedDepth < 8 * ONE_PLY)
-              {
-                  Value see_v = predictedDepth < 4 * ONE_PLY ? VALUE_ZERO
-                              : -PawnValueMg * 2 * int(predictedDepth - 3 * ONE_PLY) / ONE_PLY;
-
-                  if (pos.see_sign(move) < see_v)
-                      continue;
-              }
+              // Prune moves with negative SEE
+              if (   lmrDepth < 8
+                  && pos.see_sign(move) < Value(-35 * lmrDepth * lmrDepth))
+                  continue;
           }
-          else if (   depth < 3 * ONE_PLY
-                   && (     mp.see_sign() < 0
-                       || (!mp.see_sign() && pos.see_sign(move) < VALUE_ZERO)))
-              continue;
+          else if (   depth < 7 * ONE_PLY
+                   && pos.see_sign(move) < Value(-35 * depth / ONE_PLY * depth / ONE_PLY))
+                  continue;
       }
 
       // Speculative prefetch as early as possible
@@ -974,7 +967,7 @@ moves_loop: // When in check search starts from here
       }
 
       ss->currentMove = move;
-      ss->counterMoves = &CounterMoveHistory[moved_piece][to_sq(move)];
+      ss->counterMoves = &thisThread->counterMoveHistory[moved_piece][to_sq(move)];
 
       // Step 14. Make the move
       pos.do_move(move, st, givesCheck);
