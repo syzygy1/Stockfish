@@ -104,6 +104,7 @@ public:
   MovePicker(const Position&, Move, Depth, Search::Stack*);
 
   Move next_move();
+  bool is_good_capture();
 
 private:
   template<GenType> void score();
