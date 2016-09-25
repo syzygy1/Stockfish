@@ -133,7 +133,7 @@ public:
   void undo_null_move();
 
   // Static Exchange Evaluation
-  Value see(Move m) const;
+  bool see_test(Move m, Value v) const;
   Value see_sign(Move m) const;
 
   // Accessing hash keys
@@ -171,6 +171,7 @@ private:
   void move_piece(Piece pc, Square from, Square to);
   template<bool Do>
   void do_castling(Color us, Square from, Square& to, Square& rfrom, Square& rto);
+  Value see_ab(Move m, Value alpha, Value beta) const;
 
   // Data members
   Piece board[SQUARE_NB];

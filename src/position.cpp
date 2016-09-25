@@ -51,36 +51,7 @@ namespace {
 
 const string PieceToChar(" PNBRQK  pnbrqk");
 
-// min_attacker() is a helper function used by see() to locate the least
-// valuable attacker for the side to move, remove the attacker we just found
-// from the bitboards and scan for new X-ray attacks behind it.
-
-template<int Pt>
-PieceType min_attacker(const Bitboard* bb, Square to, Bitboard stmAttackers,
-                       Bitboard& occupied, Bitboard& attackers) {
-
-  Bitboard b = stmAttackers & bb[Pt];
-  if (!b)
-      return min_attacker<Pt+1>(bb, to, stmAttackers, occupied, attackers);
-
-  occupied ^= b & ~(b - 1);
-
-  if (Pt == PAWN || Pt == BISHOP || Pt == QUEEN)
-      attackers |= attacks_bb<BISHOP>(to, occupied) & (bb[BISHOP] | bb[QUEEN]);
-
-  if (Pt == ROOK || Pt == QUEEN)
-      attackers |= attacks_bb<ROOK>(to, occupied) & (bb[ROOK] | bb[QUEEN]);
-
-  attackers &= occupied; // After X-ray that may add already processed pieces
-  return (PieceType)Pt;
 }
-
-template<>
-PieceType min_attacker<KING>(const Bitboard*, Square, Bitboard, Bitboard&, Bitboard&) {
-  return KING; // No need to update bitboards: it is the last cycle
-}
-
-} // namespace
 
 
 /// operator<<(Position) returns an ASCII representation of the position
@@ -958,99 +929,125 @@ Key Position::key_after(Move m) const {
 /// Position::see() is a static exchange evaluator: It tries to estimate the
 /// material gain or loss resulting from a move.
 
+Value Position::see_ab(Move m, Value alpha, Value beta) const {
+
+  if (type_of(m) == CASTLING)
+      return VALUE_ZERO;
+
+  Square from = from_sq(m), to = to_sq(m);
+  Bitboard occ = pieces();
+
+  Value swap = PieceValue[MG][piece_on(to)];
+  if (type_of(m) == ENPASSANT) {
+      assert(stm() == color_of(piece_on(from)));
+      occ ^= to - pawn_push(side_to_move()); // Remove the captured pawn.
+      swap += PieceValue[MG][PAWN];
+  }
+
+  // We know that SEE <= swap. Can the opponent stand pat?
+  if (swap <= alpha)
+      return alpha;
+
+  // Update beta.
+  if (swap < beta)
+      beta = swap;
+
+  swap -= PieceValue[MG][piece_on(from)];
+
+  // We know that SEE >= swap. Can we stand pat?
+  if (swap >= beta)
+      return beta;
+
+  // Alpha will be updated below.
+
+  occ ^= from;
+  occ ^= to;
+  Color stm = color_of(piece_on(from));
+  Bitboard attackers = attackers_to(to, occ) & occ, stmAttackers;
+  beta = -beta;
+  Value bound = beta;
+
+  while (1)
+  {
+      stm = ~stm;
+
+      if (!(stmAttackers = attackers & pieces(stm))) break;
+      if (    (stmAttackers & st->blockersForKing[stm])
+          && !(st->pinnersForKing[stm] & ~occ))
+          stmAttackers &= ~st->blockersForKing[stm];
+      if (!stmAttackers) break;
+
+      // Update alpha or beta.
+      if (bound == beta)
+      {
+          if (swap > alpha)
+              alpha = swap;  // We are sure to win at least alpha.
+          bound = alpha;
+      }
+      else
+      {
+          if (swap > beta)
+              beta = swap;  // Opponent is sure to lose at most (minus) beta.
+          bound = beta;
+      }
+
+      Bitboard bb;
+      if ((bb = stmAttackers & pieces(PAWN)))
+      {
+          if ((swap += PawnValueMg) <= bound) break;
+          occ ^= bb & -bb;
+          attackers |= attacks_bb<BISHOP>(to, occ) & pieces(BISHOP, QUEEN);
+      }
+      else if ((bb = stmAttackers & pieces(KNIGHT)))
+      {
+          if ((swap += KnightValueMg) <= bound) break;
+          occ ^= bb & -bb;
+      }
+      else if ((bb = stmAttackers & pieces(BISHOP)))
+      {
+          if ((swap += BishopValueMg) <= bound) break;
+          occ ^= bb & -bb;
+          attackers |= attacks_bb<BISHOP>(to, occ) & pieces(BISHOP, QUEEN);
+      }
+      else if ((bb = stmAttackers & pieces(ROOK)))
+      {
+          if ((swap += RookValueMg) <= bound) break;
+          occ ^= bb & -bb;
+          attackers |= attacks_bb<ROOK>(to, occ) & pieces(ROOK, QUEEN);
+      }
+      else if ((bb = stmAttackers & pieces(QUEEN)))
+      {
+          if ((swap += QueenValueMg) <= bound) break;
+          occ ^= bb & -bb;
+          attackers |=  (attacks_bb<BISHOP>(to, occ) & pieces(BISHOP, QUEEN))
+                      | (attacks_bb<ROOK>(to, occ) & pieces(ROOK, QUEEN));
+      }
+      else // KING
+      {
+          if (attackers & ~pieces(stm))
+              return bound == alpha ? -beta : alpha;
+          else
+              break;
+      }
+      swap = -swap;
+      attackers &= occ;
+  }
+
+  return bound == alpha ? alpha : -beta;
+}
+
+
 Value Position::see_sign(Move m) const {
 
   assert(is_ok(m));
 
-  // Early return if SEE cannot be negative because captured piece value
-  // is not less then capturing one. Note that king moves always return
-  // here because king midgame value is set to 0.
-  if (PieceValue[MG][moved_piece(m)] <= PieceValue[MG][piece_on(to_sq(m))])
-      return VALUE_KNOWN_WIN;
-
-  return see(m);
+  return see_ab(m, -VALUE_INFINITE, VALUE_ZERO);
 }
 
-Value Position::see(Move m) const {
 
-  Square from, to;
-  Bitboard occupied, attackers, stmAttackers;
-  Value swapList[32];
-  int slIndex = 1;
-  PieceType nextVictim;
-  Color stm;
+bool Position::see_test(Move m, Value v) const {
 
-  assert(is_ok(m));
-
-  from = from_sq(m);
-  to = to_sq(m);
-  swapList[0] = PieceValue[MG][piece_on(to)];
-  stm = color_of(piece_on(from));
-  occupied = pieces() ^ from;
-
-  // Castling moves are implemented as king capturing the rook so cannot
-  // be handled correctly. Simply return VALUE_ZERO that is always correct
-  // unless in the rare case the rook ends up under attack.
-  if (type_of(m) == CASTLING)
-      return VALUE_ZERO;
-
-  if (type_of(m) == ENPASSANT)
-  {
-      occupied ^= to - pawn_push(stm); // Remove the captured pawn
-      swapList[0] = PieceValue[MG][PAWN];
-  }
-
-  // Find all attackers to the destination square, with the moving piece
-  // removed, but possibly an X-ray attacker added behind it.
-  attackers = attackers_to(to, occupied) & occupied;
-
-  // If the opponent has no attackers we are finished
-  stm = ~stm;
-  stmAttackers = attackers & pieces(stm);
-  occupied ^= to; // For the case when captured piece is a pinner
-
-  // Don't allow pinned pieces to attack pieces except the king as long all
-  // pinners are on their original square.
-  if (!(st->pinnersForKing[stm] & ~occupied))
-      stmAttackers &= ~st->blockersForKing[stm];
-
-  if (!stmAttackers)
-        return swapList[0];
-
-  // The destination square is defended, which makes things rather more
-  // difficult to compute. We proceed by building up a "swap list" containing
-  // the material gain or loss at each stop in a sequence of captures to the
-  // destination square, where the sides alternately capture, and always
-  // capture with the least valuable piece. After each capture, we look for
-  // new X-ray attacks from behind the capturing piece.
-  nextVictim = type_of(piece_on(from));
-
-  do {
-      assert(slIndex < 32);
-
-      // Add the new entry to the swap list
-      swapList[slIndex] = -swapList[slIndex - 1] + PieceValue[MG][nextVictim];
-
-      // Locate and remove the next least valuable attacker
-      nextVictim = min_attacker<PAWN>(byTypeBB, to, stmAttackers, occupied, attackers);
-      stm = ~stm;
-      stmAttackers = attackers & pieces(stm);
-
-      // Don't allow pinned pieces to attack pieces except the king
-      if (   nextVictim != KING
-          && !(st->pinnersForKing[stm] & ~occupied))
-          stmAttackers &= ~st->blockersForKing[stm];
-
-      ++slIndex;
-
-  } while (stmAttackers && (nextVictim != KING || (--slIndex, false))); // Stop before a king capture
-
-  // Having built the swap list, we negamax through it to find the best
-  // achievable score from the point of view of the side to move.
-  while (--slIndex)
-      swapList[slIndex - 1] = std::min(-swapList[slIndex], swapList[slIndex - 1]);
-
-  return swapList[0];
+  return see_ab(m, v - 1, v) >= v;
 }
 
 
