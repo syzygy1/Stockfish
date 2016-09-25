@@ -197,8 +197,8 @@ void Search::init() {
 
   for (int d = 0; d < 16; ++d)
   {
-      FutilityMoveCounts[0][d] = int(2.4 + 0.773 * pow(d + 0.00, 1.8));
-      FutilityMoveCounts[1][d] = int(2.9 + 1.045 * pow(d + 0.49, 1.8));
+      FutilityMoveCounts[0][d] = int(1.4 + 0.773 * pow(d + 0.00, 1.8));
+      FutilityMoveCounts[1][d] = int(1.9 + 1.045 * pow(d + 0.49, 1.8));
   }
 }
 
@@ -866,12 +866,10 @@ moves_loop: // When in check search starts from here
                                   thisThread->rootMoves.end(), move))
           continue;
 
-      ss->moveCount = ++moveCount;
-
       if (rootNode && thisThread == Threads.main() && Time.elapsed() > 3000)
           sync_cout << "info depth " << depth / ONE_PLY
                     << " currmove " << UCI::move(move, pos.is_chess960())
-                    << " currmovenumber " << moveCount + thisThread->PVIdx << sync_endl;
+                    << " currmovenumber " << moveCount + 1 + thisThread->PVIdx << sync_endl;
 
       if (PvNode)
           (ss+1)->pv = nullptr;
@@ -932,7 +930,7 @@ moves_loop: // When in check search starts from here
                   continue;
 
               // Reduced depth of the next LMR search
-              int lmrDepth = std::max(newDepth - reduction<PvNode>(improving, depth, moveCount), DEPTH_ZERO) / ONE_PLY;
+              int lmrDepth = std::max(newDepth - reduction<PvNode>(improving, depth, moveCount + 1), DEPTH_ZERO) / ONE_PLY;
 
               // Countermoves based pruning
               if (   lmrDepth < 3
@@ -961,11 +959,9 @@ moves_loop: // When in check search starts from here
 
       // Check for legality just before making the move
       if (!rootNode && !pos.legal(move))
-      {
-          ss->moveCount = --moveCount;
           continue;
-      }
 
+      ss->moveCount = ++moveCount;
       ss->currentMove = move;
       ss->counterMoves = &thisThread->counterMoveHistory[moved_piece][to_sq(move)];
 
