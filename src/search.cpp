@@ -962,7 +962,10 @@ moves_loop: // When in check search starts from here
       // Check for legality just before making the move
       if (!rootNode && !pos.legal(move))
       {
-          ss->moveCount = --moveCount;
+          // Include illegal moves in moveCount for the purpose of pruning
+          // and reductions, except if we have not yet seen a legal move.
+          if (moveCount == 1)
+              ss->moveCount = --moveCount;
           continue;
       }
 
