@@ -926,50 +926,40 @@ Key Position::key_after(Move m) const {
 }
 
 
-/// Position::see() is a static exchange evaluator: It tries to estimate the
-/// material gain or loss resulting from a move.
+/// Position::see_test() is a static exchange evaluator. It tests whether
+/// the expected gain of a move is at least "value" (which may be negative).
 
-Value Position::see_ab(Move m, Value alpha, Value beta) const {
+bool Position::see_test(Move m, Value value) const {
 
   if (type_of(m) == CASTLING)
-      return VALUE_ZERO;
+      return VALUE_ZERO >= value;
 
   Square from = from_sq(m), to = to_sq(m);
   Bitboard occ = pieces();
 
-  Value swap = PieceValue[MG][piece_on(to)];
+  Value swap = PieceValue[MG][piece_on(to)] - value;
   if (type_of(m) == ENPASSANT) {
       assert(stm() == color_of(piece_on(from)));
       occ ^= to - pawn_push(side_to_move()); // Remove the captured pawn.
       swap += PieceValue[MG][PAWN];
   }
+  if (swap < 0)
+      return false;
 
-  // We know that SEE <= swap. Can the opponent stand pat?
-  if (swap <= alpha)
-      return alpha;
-
-  // Update beta.
-  if (swap < beta)
-      beta = swap;
-
-  swap -= PieceValue[MG][piece_on(from)];
-
-  // We know that SEE >= swap. Can we stand pat?
-  if (swap >= beta)
-      return beta;
-
-  // Alpha will be updated below.
+  swap = PieceValue[MG][piece_on(from)] - swap;
+  if (swap <= 0)
+      return true;
 
   occ ^= from;
   occ ^= to;
   Color stm = color_of(piece_on(from));
-  Bitboard attackers = attackers_to(to, occ) & occ, stmAttackers;
-  beta = -beta;
-  Value bound = beta;
+  Bitboard attackers = attackers_to(to, occ), stmAttackers;
+  bool res = true;
 
   while (1)
   {
       stm = ~stm;
+      attackers &= occ;
 
       if (!(stmAttackers = attackers & pieces(stm))) break;
       if (    (stmAttackers & st->blockersForKing[stm])
@@ -977,77 +967,43 @@ Value Position::see_ab(Move m, Value alpha, Value beta) const {
           stmAttackers &= ~st->blockersForKing[stm];
       if (!stmAttackers) break;
 
-      // Update alpha or beta.
-      if (bound == beta)
-      {
-          if (swap > alpha)
-              alpha = swap;  // We are sure to win at least alpha.
-          bound = alpha;
-      }
-      else
-      {
-          if (swap > beta)
-              beta = swap;  // Opponent is sure to lose at most (minus) beta.
-          bound = beta;
-      }
-
+      res = !res;
       Bitboard bb;
       if ((bb = stmAttackers & pieces(PAWN)))
       {
-          if ((swap += PawnValueMg) <= bound) break;
+          if ((swap = PawnValueMg - swap) < (int)res) break;
           occ ^= bb & -bb;
           attackers |= attacks_bb<BISHOP>(to, occ) & pieces(BISHOP, QUEEN);
       }
       else if ((bb = stmAttackers & pieces(KNIGHT)))
       {
-          if ((swap += KnightValueMg) <= bound) break;
+          if ((swap = KnightValueMg - swap) < (int)res) break;
           occ ^= bb & -bb;
       }
       else if ((bb = stmAttackers & pieces(BISHOP)))
       {
-          if ((swap += BishopValueMg) <= bound) break;
+          if ((swap = BishopValueMg - swap) < (int)res) break;
           occ ^= bb & -bb;
           attackers |= attacks_bb<BISHOP>(to, occ) & pieces(BISHOP, QUEEN);
       }
       else if ((bb = stmAttackers & pieces(ROOK)))
       {
-          if ((swap += RookValueMg) <= bound) break;
+          if ((swap = RookValueMg - swap) < (int)res) break;
           occ ^= bb & -bb;
           attackers |= attacks_bb<ROOK>(to, occ) & pieces(ROOK, QUEEN);
       }
       else if ((bb = stmAttackers & pieces(QUEEN)))
       {
-          if ((swap += QueenValueMg) <= bound) break;
+          if ((swap = QueenValueMg - swap) < (int)res) break;
           occ ^= bb & -bb;
           attackers |=  (attacks_bb<BISHOP>(to, occ) & pieces(BISHOP, QUEEN))
                       | (attacks_bb<ROOK>(to, occ) & pieces(ROOK, QUEEN));
       }
       else // KING
-      {
-          if (attackers & ~pieces(stm))
-              return bound == alpha ? -beta : alpha;
-          else
-              break;
-      }
-      swap = -swap;
-      attackers &= occ;
+          return attackers & ~pieces(stm) ? !res : res;
   }
 
-  return bound == alpha ? alpha : -beta;
-}
-
-
-Value Position::see_sign(Move m) const {
-
-  assert(is_ok(m));
-
-  return see_ab(m, -VALUE_INFINITE, VALUE_ZERO);
-}
-
-
-bool Position::see_test(Move m, Value v) const {
-
-  return see_ab(m, v - 1, v) >= v;
+  return res;
 }
 
 

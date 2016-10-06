@@ -134,7 +134,6 @@ public:
 
   // Static Exchange Evaluation
   bool see_test(Move m, Value v) const;
-  Value see_sign(Move m) const;
 
   // Accessing hash keys
   Key key() const;
