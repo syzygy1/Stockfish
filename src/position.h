@@ -170,7 +170,6 @@ private:
   void move_piece(Piece pc, Square from, Square to);
   template<bool Do>
   void do_castling(Color us, Square from, Square& to, Square& rfrom, Square& rto);
-  Value see_ab(Move m, Value alpha, Value beta) const;
 
   // Data members
   Piece board[SQUARE_NB];
