@@ -29,6 +29,7 @@
 #include "misc.h"
 #include "movegen.h"
 #include "movepick.h"
+#include "position.h"
 #include "search.h"
 #include "timeman.h"
 #include "thread.h"
@@ -505,7 +506,7 @@ void Thread::search() {
 
               if (   rootMoves.size() == 1
                   || Time.elapsed() > Time.optimum() * unstablePvFactor * improvingFactor / 628
-                  || (mainThread->easyMovePlayed = doEasyMove))
+                  || (mainThread->easyMovePlayed = doEasyMove, doEasyMove))
               {
                   // If we are allowed to ponder do not stop the search now but
                   // keep pondering until the GUI sends "ponderhit" or "stop".
@@ -727,8 +728,7 @@ namespace {
         &&  ttMove == MOVE_NONE
         &&  eval + razor_margin[depth / ONE_PLY] <= alpha)
     {
-        if (   depth <= ONE_PLY
-            && eval + razor_margin[3 * ONE_PLY] <= alpha)
+        if (depth <= ONE_PLY)
             return qsearch<NonPV, false>(pos, ss, alpha, beta, DEPTH_ZERO);
 
         Value ralpha = alpha - razor_margin[depth / ONE_PLY];
@@ -743,7 +743,7 @@ namespace {
         &&  eval - futility_margin(depth) >= beta
         &&  eval < VALUE_KNOWN_WIN  // Do not return unproven wins
         &&  pos.non_pawn_material(pos.side_to_move()))
-        return eval - futility_margin(depth);
+        return eval;
 
     // Step 8. Null move search with verification search (is omitted in PV nodes)
     if (   !PvNode
@@ -844,8 +844,7 @@ moves_loop: // When in check search starts from here
     singularExtensionNode =   !rootNode
                            &&  depth >= 8 * ONE_PLY
                            &&  ttMove != MOVE_NONE
-                       /*  &&  ttValue != VALUE_NONE Already implicit in the next condition */
-                           &&  abs(ttValue) < VALUE_KNOWN_WIN
+                           &&  ttValue != VALUE_NONE
                            && !excludedMove // Recursive singular search is not allowed
                            && (tte->bound() & BOUND_LOWER)
                            &&  tte->depth() >= depth - 3 * ONE_PLY;
@@ -890,7 +889,7 @@ moves_loop: // When in check search starts from here
       // Step 12. Extend checks
       if (    givesCheck
           && !moveCountPruning
-          &&  pos.see_sign(move) >= VALUE_ZERO)
+          &&  pos.see_ge(move, VALUE_ZERO))
           extension = ONE_PLY;
 
       // Singular extension search. If all moves but one fail low on a search of
@@ -903,7 +902,7 @@ moves_loop: // When in check search starts from here
           && !extension
           &&  pos.legal(move))
       {
-          Value rBeta = ttValue - 2 * depth / ONE_PLY;
+          Value rBeta = std::max(ttValue - 2 * depth / ONE_PLY, -VALUE_MATE);
           Depth d = (depth / (2 * ONE_PLY)) * ONE_PLY;
           ss->excludedMove = move;
           ss->skipEarlyPruning = true;
@@ -920,7 +919,6 @@ moves_loop: // When in check search starts from here
 
       // Step 13. Pruning at shallow depth
       if (  !rootNode
-          && !inCheck
           &&  bestValue > VALUE_MATED_IN_MAX_PLY)
       {
           if (   !captureOrPromotion
@@ -948,11 +946,11 @@ moves_loop: // When in check search starts from here
 
               // Prune moves with negative SEE
               if (   lmrDepth < 8
-                  && pos.see_sign(move) < Value(-35 * lmrDepth * lmrDepth))
+                  && !pos.see_ge(move, Value(-35 * lmrDepth * lmrDepth)))
                   continue;
           }
           else if (   depth < 7 * ONE_PLY
-                   && pos.see_sign(move) < Value(-35 * depth / ONE_PLY * depth / ONE_PLY))
+                   && !pos.see_ge(move, Value(-35 * depth / ONE_PLY * depth / ONE_PLY)))
                   continue;
       }
 
@@ -994,7 +992,7 @@ moves_loop: // When in check search starts from here
               // because the destination square is empty.
               else if (   type_of(move) == NORMAL
                        && type_of(pos.piece_on(to_sq(move))) != PAWN
-                       && pos.see(make_move(to_sq(move), from_sq(move))) < VALUE_ZERO)
+                       && !pos.see_ge(make_move(to_sq(move), from_sq(move)),  VALUE_ZERO))
                   r -= 2 * ONE_PLY;
 
               // Decrease/increase reduction for moves with a good/bad history
@@ -1122,6 +1120,9 @@ moves_loop: // When in check search starts from here
     // All legal moves have been searched and if there are no legal moves, it
     // must be a mate or a stalemate. If we are in a singular extension search then
     // return a fail low score.
+
+    assert(moveCount || !inCheck || excludedMove || !MoveList<LEGAL>(pos).size());
+
     if (!moveCount)
         bestValue = excludedMove ? alpha
                    :     inCheck ? mated_in(ss->ply) : DrawValue[pos.side_to_move()];
@@ -1301,7 +1302,7 @@ moves_loop: // When in check search starts from here
               continue;
           }
 
-          if (futilityBase <= alpha && pos.see(move) <= VALUE_ZERO)
+          if (futilityBase <= alpha && !pos.see_ge(move, VALUE_ZERO + 1))
           {
               bestValue = std::max(bestValue, futilityBase);
               continue;
@@ -1316,7 +1317,7 @@ moves_loop: // When in check search starts from here
       // Don't search moves with negative SEE values
       if (  (!InCheck || evasionPrunable)
           &&  type_of(move) != PROMOTION
-          &&  pos.see_sign(move) < VALUE_ZERO)
+          &&  !pos.see_ge(move, VALUE_ZERO))
           continue;
 
       // Speculative prefetch as early as possible
@@ -1588,12 +1589,15 @@ string UCI::pv(const Position& pos, Depth depth, Value alpha, Value beta) {
 /// fail high at root. We try hard to have a ponder move to return to the GUI,
 /// otherwise in case of 'ponder on' we have nothing to think on.
 
-bool RootMove::extract_ponder_from_tt(Position& pos)
-{
+bool RootMove::extract_ponder_from_tt(Position& pos) {
+
     StateInfo st;
     bool ttHit;
 
     assert(pv.size() == 1);
+
+    if (!pv[0])
+        return false;
 
     pos.do_move(pv[0], st, pos.gives_check(pv[0]));
     TTEntry* tte = TT.probe(pos.key(), ttHit);
