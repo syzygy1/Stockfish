@@ -343,6 +343,8 @@ void Thread::search() {
   MainThread* mainThread = (this == Threads.main() ? Threads.main() : nullptr);
 
   std::memset(ss-5, 0, 8 * sizeof(Stack));
+  for (int i = -5; i < 0; ++i)
+    ss[i].counterMoves = &counterMoveHistory[(Piece)0][SQ_B1];
 
   bestValue = delta = alpha = -VALUE_INFINITE;
   beta = VALUE_INFINITE;
@@ -614,7 +616,6 @@ namespace {
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 
     ss->currentMove = (ss+1)->excludedMove = bestMove = MOVE_NONE;
-    ss->counterMoves = nullptr;
     (ss+1)->skipEarlyPruning = false;
     (ss+2)->killers[0] = (ss+2)->killers[1] = MOVE_NONE;
 
@@ -752,7 +753,7 @@ namespace {
         &&  pos.non_pawn_material(pos.side_to_move()))
     {
         ss->currentMove = MOVE_NULL;
-        ss->counterMoves = nullptr;
+        ss->counterMoves = &thisThread->counterMoveHistory[make_piece(pos.side_to_move(), (PieceType)0)][SQ_A1];
 
         assert(eval - beta >= 0);
 
@@ -934,9 +935,10 @@ moves_loop: // When in check search starts from here
 
               // Countermoves based pruning
               if (   lmrDepth < 3
-                  && (!cmh  || (*cmh )[moved_piece][to_sq(move)] < VALUE_ZERO)
-                  && (!fmh  || (*fmh )[moved_piece][to_sq(move)] < VALUE_ZERO)
-                  && (!fmh2 || (*fmh2)[moved_piece][to_sq(move)] < VALUE_ZERO || (cmh && fmh)))
+                  && (*cmh )[moved_piece][to_sq(move)] < VALUE_ZERO
+                  && (*fmh )[moved_piece][to_sq(move)] < VALUE_ZERO
+//                  && (!fmh2 || (*fmh2)[moved_piece][to_sq(move)] < VALUE_ZERO || (cmh && fmh))
+                  && (*fmh2)[moved_piece][to_sq(move)] < VALUE_ZERO)
                   continue;
 
               // Futility pruning: parent node
@@ -996,11 +998,11 @@ moves_loop: // When in check search starts from here
                   r -= 2 * ONE_PLY;
 
               // Decrease/increase reduction for moves with a good/bad history
-              Value val = thisThread->history[moved_piece][to_sq(move)]
-                         +    (cmh  ? (*cmh )[moved_piece][to_sq(move)] : VALUE_ZERO)
-                         +    (fmh  ? (*fmh )[moved_piece][to_sq(move)] : VALUE_ZERO)
-                         +    (fmh2 ? (*fmh2)[moved_piece][to_sq(move)] : VALUE_ZERO)
-                         +    thisThread->fromTo.get(~pos.side_to_move(), move);
+              Value val =  thisThread->history[moved_piece][to_sq(move)]
+                         + (*cmh )[moved_piece][to_sq(move)]
+                         + (*fmh )[moved_piece][to_sq(move)]
+                         + (*fmh2)[moved_piece][to_sq(move)]
+                         + thisThread->fromTo.get(~pos.side_to_move(), move);
               int rHist = (val - 8000) / 20000;
               r = std::max(DEPTH_ZERO, (r / ONE_PLY - rHist) * ONE_PLY);
           }
@@ -1421,14 +1423,9 @@ moves_loop: // When in check search starts from here
     CounterMoveStats* fmh1 = (ss-2)->counterMoves;
     CounterMoveStats* fmh2 = (ss-4)->counterMoves;
 
-    if (cmh)
-        cmh->update(pc, s, bonus);
-
-    if (fmh1)
-        fmh1->update(pc, s, bonus);
-
-    if (fmh2)
-        fmh2->update(pc, s, bonus);
+    cmh->update(pc, s, bonus);
+    fmh1->update(pc, s, bonus);
+    fmh2->update(pc, s, bonus);
   }
 
 
@@ -1450,10 +1447,14 @@ moves_loop: // When in check search starts from here
     thisThread->history.update(pos.moved_piece(move), to_sq(move), bonus);
     update_cm_stats(ss, pos.moved_piece(move), to_sq(move), bonus);
 
-    if ((ss-1)->counterMoves)
+    if ((ss-1)->currentMove != MOVE_NULL)
     {
         Square prevSq = to_sq((ss-1)->currentMove);
         thisThread->counterMoves.update(pos.piece_on(prevSq), prevSq, move);
+    }
+    else
+    {
+        thisThread->counterMoves.update(make_piece(pos.side_to_move(), (PieceType)0), SQ_A1, move);
     }
 
     // Decrease all the other played quiet moves

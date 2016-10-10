@@ -71,8 +71,13 @@ MovePicker::MovePicker(const Position& p, Move ttm, Depth d, Search::Stack* s)
 
   assert(d > DEPTH_ZERO);
 
-  Square prevSq = to_sq((ss-1)->currentMove);
-  countermove = pos.this_thread()->counterMoves[pos.piece_on(prevSq)][prevSq];
+  if ((ss-1)->currentMove != MOVE_NULL)
+  {
+      Square prevSq = to_sq((ss-1)->currentMove);
+      countermove = pos.this_thread()->counterMoves[pos.piece_on(prevSq)][prevSq];
+  }
+  else
+      countermove = pos.this_thread()->counterMoves[make_piece(pos.side_to_move(),(PieceType)0)][SQ_A1];
 
   stage = pos.checkers() ? EVASION : MAIN_SEARCH;
   ttMove = ttm && pos.pseudo_legal(ttm) ? ttm : MOVE_NONE;
@@ -150,10 +155,10 @@ void MovePicker::score<QUIETS>() {
   Color c = pos.side_to_move();
 
   for (auto& m : *this)
-      m.value =      history[pos.moved_piece(m)][to_sq(m)]
-               + (cm ? (*cm)[pos.moved_piece(m)][to_sq(m)] : VALUE_ZERO)
-               + (fm ? (*fm)[pos.moved_piece(m)][to_sq(m)] : VALUE_ZERO)
-               + (f2 ? (*f2)[pos.moved_piece(m)][to_sq(m)] : VALUE_ZERO)
+      m.value =  history[pos.moved_piece(m)][to_sq(m)]
+               +   (*cm)[pos.moved_piece(m)][to_sq(m)]
+               +   (*fm)[pos.moved_piece(m)][to_sq(m)]
+               +   (*f2)[pos.moved_piece(m)][to_sq(m)]
                + fromTo.get(c, m);
 }
 
