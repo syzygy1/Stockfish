@@ -77,7 +77,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, Depth d, Search::Stack* s)
       countermove = pos.this_thread()->counterMoves[pos.piece_on(prevSq)][prevSq];
   }
   else
-      countermove = pos.this_thread()->counterMoves[make_piece(pos.side_to_move(),(PieceType)0)][SQ_A1];
+      countermove = pos.this_thread()->counterMoves[make_piece(~pos.side_to_move(),(PieceType)0)][SQ_A1];
 
   stage = pos.checkers() ? EVASION : MAIN_SEARCH;
   ttMove = ttm && pos.pseudo_legal(ttm) ? ttm : MOVE_NONE;

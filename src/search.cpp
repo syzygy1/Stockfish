@@ -1454,7 +1454,7 @@ moves_loop: // When in check search starts from here
     }
     else
     {
-        thisThread->counterMoves.update(make_piece(pos.side_to_move(), (PieceType)0), SQ_A1, move);
+        thisThread->counterMoves.update(make_piece(~pos.side_to_move(), (PieceType)0), SQ_A1, move);
     }
 
     // Decrease all the other played quiet moves
