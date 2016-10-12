@@ -169,7 +169,7 @@ private:
   void remove_piece(Piece pc, Square s);
   void move_piece(Piece pc, Square from, Square to);
   template<bool Do>
-  void do_castling(Color us, Square from, Square& to, Square& rfrom, Square& rto);
+  void do_castling(Color us, Square from, Square to, Square& rfrom, Square& rto);
 
   // Data members
   Piece board[SQUARE_NB];
@@ -362,8 +362,7 @@ inline bool Position::capture_or_promotion(Move m) const {
 
 inline bool Position::capture(Move m) const {
   assert(is_ok(m));
-  // Castling is encoded as "king captures rook"
-  return (!empty(to_sq(m)) && type_of(m) != CASTLING) || type_of(m) == ENPASSANT;
+  return !empty(to_sq(m)) || type_of(m) == ENPASSANT;
 }
 
 inline Piece Position::captured_piece() const {

@@ -624,9 +624,9 @@ bool Position::gives_check(Move m) const {
   case CASTLING:
   {
       Square kfrom = from;
-      Square rfrom = to; // Castling is encoded as 'King captures the rook'
-      Square kto = relative_square(sideToMove, rfrom > kfrom ? SQ_G1 : SQ_C1);
-      Square rto = relative_square(sideToMove, rfrom > kfrom ? SQ_F1 : SQ_D1);
+      Square kto = to;
+      Square rfrom = castling_rook_square(sideToMove | (from < to ? KING_SIDE : QUEEN_SIDE));
+      Square rto = relative_square(sideToMove, from < to ? SQ_F1 : SQ_D1);
 
       return   (PseudoAttacks[ROOK][rto] & square<KING>(~sideToMove))
             && (attacks_bb<ROOK>(rto, (pieces() ^ kfrom ^ rfrom) | rto | kto) & square<KING>(~sideToMove));
@@ -671,23 +671,23 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   Piece captured = type_of(m) == ENPASSANT ? make_piece(them, PAWN) : piece_on(to);
 
   assert(color_of(pc) == us);
-  assert(captured == NO_PIECE || color_of(captured) == (type_of(m) != CASTLING ? them : us));
+  assert(captured == NO_PIECE || color_of(captured) == them);
   assert(type_of(captured) != KING);
 
   if (type_of(m) == CASTLING)
   {
       assert(pc == make_piece(us, KING));
-      assert(captured == make_piece(us, ROOK));
+      assert(captured == NO_PIECE);
 
       Square rfrom, rto;
       do_castling<true>(us, from, to, rfrom, rto);
 
-      st->psq += PSQT::psq[captured][rto] - PSQT::psq[captured][rfrom];
-      k ^= Zobrist::psq[captured][rfrom] ^ Zobrist::psq[captured][rto];
-      captured = NO_PIECE;
+      Piece rook = make_piece(us, ROOK);
+      st->psq += PSQT::psq[rook][rto] - PSQT::psq[rook][rfrom];
+      k ^= Zobrist::psq[rook][rfrom] ^ Zobrist::psq[rook][rto];
   }
 
-  if (captured)
+  else if (captured)
   {
       Square capsq = to;
 
@@ -880,12 +880,11 @@ void Position::undo_move(Move m) {
 /// Position::do_castling() is a helper used to do/undo a castling move. This
 /// is a bit tricky in Chess960 where from/to squares can overlap.
 template<bool Do>
-void Position::do_castling(Color us, Square from, Square& to, Square& rfrom, Square& rto) {
+void Position::do_castling(Color us, Square from, Square to, Square& rfrom, Square& rto) {
 
   bool kingSide = to > from;
-  rfrom = to; // Castling is encoded as "king captures friendly rook"
+  rfrom = castling_rook_square(us | (kingSide ? KING_SIDE : QUEEN_SIDE));
   rto = relative_square(us, kingSide ? SQ_F1 : SQ_D1);
-  to = relative_square(us, kingSide ? SQ_G1 : SQ_C1);
 
   // Remove both pieces first since squares could overlap in Chess960
   remove_piece(make_piece(us, KING), Do ? from : to);
@@ -963,11 +962,13 @@ bool Position::see_ge(Move m, Value v) const {
 
   assert(is_ok(m));
 
+#if 0
   // Castling moves are implemented as king capturing the rook so cannot be
   // handled correctly. Simply assume the SEE value is VALUE_ZERO that is always
   // correct unless in the rare case the rook ends up under attack.
   if (type_of(m) == CASTLING)
       return VALUE_ZERO >= v;
+#endif
 
   Square from = from_sq(m), to = to_sq(m);
   PieceType nextVictim = type_of(piece_on(from));

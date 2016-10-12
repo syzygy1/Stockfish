@@ -55,7 +55,7 @@ namespace {
     if (Chess960 && (attacks_bb<ROOK>(kto, pos.pieces() ^ rfrom) & pos.pieces(~us, ROOK, QUEEN)))
         return moveList;
 
-    Move m = make<CASTLING>(kfrom, rfrom);
+    Move m = make<CASTLING>(kfrom, kto);
 
     if (Checks && !pos.gives_check(m))
         return moveList;
