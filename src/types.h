@@ -428,7 +428,7 @@ inline Move make(Square from, Square to, PieceType pt = KNIGHT) {
 }
 
 inline bool is_ok(Move m) {
-  return from_sq(m) != to_sq(m); // Catch MOVE_NULL and MOVE_NONE
+  return m != MOVE_NONE && m != MOVE_NULL;
 }
 
 #endif // #ifndef TYPES_H_INCLUDED

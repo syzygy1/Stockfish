@@ -274,13 +274,13 @@ void Position::set_castling_right(Color c, Square rfrom) {
   CastlingSide cs = kfrom < rfrom ? KING_SIDE : QUEEN_SIDE;
   CastlingRight cr = (c | cs);
 
+  Square kto = relative_square(c, cs == KING_SIDE ? SQ_G1 : SQ_C1);
+  Square rto = relative_square(c, cs == KING_SIDE ? SQ_F1 : SQ_D1);
+
   st->castlingRights |= cr;
   castlingRightsMask[kfrom] |= cr;
   castlingRightsMask[rfrom] |= cr;
-  castlingRookSquare[cr] = rfrom;
-
-  Square kto = relative_square(c, cs == KING_SIDE ? SQ_G1 : SQ_C1);
-  Square rto = relative_square(c, cs == KING_SIDE ? SQ_F1 : SQ_D1);
+  castlingRookSquare[kto] = rfrom;
 
   for (Square s = std::min(rfrom, rto); s <= std::max(rfrom, rto); ++s)
       if (s != kfrom && s != rfrom)
@@ -386,16 +386,16 @@ const string Position::fen() const {
   ss << (sideToMove == WHITE ? " w " : " b ");
 
   if (can_castle(WHITE_OO))
-      ss << (chess960 ? char('A' + file_of(castling_rook_square(WHITE |  KING_SIDE))) : 'K');
+      ss << (chess960 ? char('A' + file_of(castling_rook_square(SQ_G1))) : 'K');
 
   if (can_castle(WHITE_OOO))
-      ss << (chess960 ? char('A' + file_of(castling_rook_square(WHITE | QUEEN_SIDE))) : 'Q');
+      ss << (chess960 ? char('A' + file_of(castling_rook_square(SQ_C1))) : 'Q');
 
   if (can_castle(BLACK_OO))
-      ss << (chess960 ? char('a' + file_of(castling_rook_square(BLACK |  KING_SIDE))) : 'k');
+      ss << (chess960 ? char('a' + file_of(castling_rook_square(SQ_G8))) : 'k');
 
   if (can_castle(BLACK_OOO))
-      ss << (chess960 ? char('a' + file_of(castling_rook_square(BLACK | QUEEN_SIDE))) : 'q');
+      ss << (chess960 ? char('a' + file_of(castling_rook_square(SQ_C8))) : 'q');
 
   if (!can_castle(WHITE) && !can_castle(BLACK))
       ss << '-';
@@ -623,13 +623,12 @@ bool Position::gives_check(Move m) const {
   }
   case CASTLING:
   {
-      Square kfrom = from;
-      Square kto = to;
-      Square rfrom = castling_rook_square(sideToMove | (from < to ? KING_SIDE : QUEEN_SIDE));
+      // from/to hold king from/to squares.
+      Square rfrom = castling_rook_square(to);
       Square rto = relative_square(sideToMove, from < to ? SQ_F1 : SQ_D1);
 
       return   (PseudoAttacks[ROOK][rto] & square<KING>(~sideToMove))
-            && (attacks_bb<ROOK>(rto, (pieces() ^ kfrom ^ rfrom) | rto | kto) & square<KING>(~sideToMove));
+            && (attacks_bb<ROOK>(rto, (pieces() ^ from ^ rfrom) | rto | to) & square<KING>(~sideToMove));
   }
   default:
       assert(false);
@@ -883,7 +882,7 @@ template<bool Do>
 void Position::do_castling(Color us, Square from, Square to, Square& rfrom, Square& rto) {
 
   bool kingSide = to > from;
-  rfrom = castling_rook_square(us | (kingSide ? KING_SIDE : QUEEN_SIDE));
+  rfrom = castling_rook_square(to);
   rto = relative_square(us, kingSide ? SQ_F1 : SQ_D1);
 
   // Remove both pieces first since squares could overlap in Chess960

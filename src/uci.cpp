@@ -249,7 +249,7 @@ std::string UCI::square(Square s) {
 /// The only special case is castling, where we print in the e1g1 notation in
 /// normal chess mode, and in e1h1 notation in chess960 mode.
 
-string UCI::move(Move m, const Position& pos) {
+string UCI::move(Move m, const Position &pos) {
 
   Square from = from_sq(m);
   Square to = to_sq(m);
@@ -261,7 +261,7 @@ string UCI::move(Move m, const Position& pos) {
       return "0000";
 
   if (type_of(m) == CASTLING && pos.is_chess960())
-      to = pos.castling_rook_square(pos.side_to_move() | (to > from ? KING_SIDE : QUEEN_SIDE));
+      to = pos.castling_rook_square(to);
 
   string move = UCI::square(from) + UCI::square(to);
 
