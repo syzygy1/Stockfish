@@ -667,16 +667,13 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   Square from = from_sq(m);
   Square to = to_sq(m);
   Piece pc = piece_on(from);
-  Piece captured = type_of(m) == ENPASSANT ? make_piece(them, PAWN) : piece_on(to);
+  Piece captured;
 
   assert(color_of(pc) == us);
-  assert(captured == NO_PIECE || color_of(captured) == them);
-  assert(type_of(captured) != KING);
 
   if (type_of(m) == CASTLING)
   {
       assert(pc == make_piece(us, KING));
-      assert(captured == NO_PIECE);
 
       Square rfrom, rto;
       do_castling<true>(us, from, to, rfrom, rto);
@@ -684,10 +681,16 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
       Piece rook = make_piece(us, ROOK);
       st->psq += PSQT::psq[rook][rto] - PSQT::psq[rook][rfrom];
       k ^= Zobrist::psq[rook][rfrom] ^ Zobrist::psq[rook][rto];
+      captured = NO_PIECE;
   }
+  else
+      captured = type_of(m) == ENPASSANT ? make_piece(them, PAWN) : piece_on(to);
 
-  else if (captured)
+  if (captured)
   {
+      assert(type_of(captured) != KING);
+      assert(color_of(captured) == them);
+
       Square capsq = to;
 
       // If the captured piece is a pawn, update pawn hash key, otherwise

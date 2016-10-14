@@ -362,7 +362,7 @@ inline bool Position::capture_or_promotion(Move m) const {
 
 inline bool Position::capture(Move m) const {
   assert(is_ok(m));
-  return !empty(to_sq(m)) || type_of(m) == ENPASSANT;
+  return (!empty(to_sq(m)) && type_of(m) != CASTLING) || type_of(m) == ENPASSANT;
 }
 
 inline Piece Position::captured_piece() const {
