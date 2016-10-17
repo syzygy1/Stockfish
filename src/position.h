@@ -362,6 +362,7 @@ inline bool Position::capture_or_promotion(Move m) const {
 
 inline bool Position::capture(Move m) const {
   assert(is_ok(m));
+  // In Chess960, the king may castle to an occupied square.
   return (!empty(to_sq(m)) && type_of(m) != CASTLING) || type_of(m) == ENPASSANT;
 }
 

@@ -964,6 +964,12 @@ bool Position::see_ge(Move m, Value v) const {
 
   assert(is_ok(m));
 
+  // In Chess960, the king might castle to the square of the friendly rook,
+  // thus appearing to capture the rook. Simply assume the SEE value is
+  // VALUE_ZERO, which is always correct.
+  if (type_of(m) == CASTLING)
+      return VALUE_ZERO >= v;
+
   Square from = from_sq(m), to = to_sq(m);
   PieceType nextVictim = type_of(piece_on(from));
   Color stm = ~color_of(piece_on(from)); // First consider opponent's move
