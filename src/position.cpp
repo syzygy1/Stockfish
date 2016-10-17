@@ -625,7 +625,7 @@ bool Position::gives_check(Move m) const {
   {
       // from/to hold king from/to squares.
       Square rfrom = castling_rook_square(to);
-      Square rto = relative_square(sideToMove, from < to ? SQ_F1 : SQ_D1);
+      Square rto = relative_square(sideToMove, rfrom > from ? SQ_F1 : SQ_D1);
 
       return   (PseudoAttacks[ROOK][rto] & square<KING>(~sideToMove))
             && (attacks_bb<ROOK>(rto, (pieces() ^ from ^ rfrom) | rto | to) & square<KING>(~sideToMove));
@@ -884,8 +884,8 @@ void Position::undo_move(Move m) {
 template<bool Do>
 void Position::do_castling(Color us, Square from, Square to, Square& rfrom, Square& rto) {
 
-  bool kingSide = to > from;
   rfrom = castling_rook_square(to);
+  bool kingSide = rfrom > from;
   rto = relative_square(us, kingSide ? SQ_F1 : SQ_D1);
 
   // Remove both pieces first since squares could overlap in Chess960
