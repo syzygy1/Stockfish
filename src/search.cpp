@@ -1186,8 +1186,7 @@ moves_loop: // When in check search starts from here
     ttMove = ttHit ? tte->move() : MOVE_NONE;
     ttValue = ttHit ? value_from_tt(tte->value(), ss->ply) : VALUE_NONE;
 
-    if (  !PvNode
-        && ttHit
+    if (   ttHit
         && tte->depth() >= ttDepth
         && ttValue != VALUE_NONE // Only in case of TT access race
         && (ttValue >= beta ? (tte->bound() &  BOUND_LOWER)
@@ -1202,18 +1201,9 @@ moves_loop: // When in check search starts from here
     }
     else
     {
-        if (ttHit)
-        {
-            // Never assume anything on values stored in TT
-            if ((ss->staticEval = bestValue = tte->eval()) == VALUE_NONE)
-                ss->staticEval = bestValue = evaluate(pos);
-
-            // Can ttValue be used as a better position evaluation?
-            if (   ttValue != VALUE_NONE
-                && (tte->bound() & (ttValue > bestValue ? BOUND_LOWER : BOUND_UPPER)))
-                bestValue = ttValue;
-        }
-        else
+        // Never assume anything on values stored in TT
+        if (   !ttHit
+            || (ss->staticEval = bestValue = tte->eval()) == VALUE_NONE)
             ss->staticEval = bestValue =
             (ss-1)->currentMove != MOVE_NULL ? evaluate(pos)
                                              : -(ss-1)->staticEval + 2 * Eval::Tempo;
