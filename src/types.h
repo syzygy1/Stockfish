@@ -75,8 +75,10 @@
 #if defined(USE_PEXT)
 #  include <immintrin.h> // Header for _pext_u64() intrinsic
 #  define pext(b, m) _pext_u64(b, m)
+#  define pdep(b, m) _pdep_u64(b, m)
 #else
 #  define pext(b, m) 0
+#  define pdep(b, m) 0
 #endif
 
 #ifdef USE_POPCNT

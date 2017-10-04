@@ -51,8 +51,18 @@ namespace {
 
   int MSBTable[256];            // To implement software msb()
   Square BSFTable[SQUARE_NB];   // To implement software bitscan
+
+#ifndef USE_PEXT
+
   Bitboard RookTable[0x19000];  // To store rook attacks
   Bitboard BishopTable[0x1480]; // To store bishop attacks
+
+#else
+
+  uint16_t RookTable[0x19000];  // To store rook attacks
+  uint16_t BishopTable[0x1480]; // To store bishop attacks
+
+#endif
 
   void init_magics(Bitboard table[], Magic magics[], Square deltas[]);
 
@@ -269,8 +279,18 @@ namespace {
         // the number of 1s of the mask. Hence we deduce the size of the shift to
         // apply to the 64 or 32 bits word to get the index.
         Magic& m = magics[s];
-        m.mask  = sliding_attack(deltas, s, 0) & ~edges;
+
+#ifndef USE_PEXT
+
+        m.mask = sliding_attack(deltas, s, 0) & ~edges;
         m.shift = (Is64Bit ? 64 : 32) - popcount(m.mask);
+
+#else
+
+        m.mask2 = sliding_attack(deltas, s, 0);
+        m.mask  = m.mask2 & ~edges;
+
+#endif
 
         // Set the offset for the attacks table of the square. We have individual
         // table sizes for each square with "Fancy Magic Bitboards".
@@ -284,7 +304,7 @@ namespace {
             reference[size] = sliding_attack(deltas, s, b);
 
             if (HasPext)
-                m.attacks[pext(b, m.mask)] = reference[size];
+                m.attacks[pext(b, m.mask)] = pext(reference[size], m.mask2);
 
             size++;
             b = (b - m.mask) & m.mask;
