@@ -57,14 +57,17 @@ namespace {
   Bitboard RookTable[0x19000];  // To store rook attacks
   Bitboard BishopTable[0x1480]; // To store bishop attacks
 
+  void init_magics(Bitboard table[], Magic magics[], Square deltas[]);
+
 #else
 
   uint16_t RookTable[0x19000];  // To store rook attacks
   uint16_t BishopTable[0x1480]; // To store bishop attacks
 
+  void init_magics(uint16_t table[], Magic magics[], Square deltas[]);
+
 #endif
 
-  void init_magics(Bitboard table[], Magic magics[], Square deltas[]);
 
   // bsf_index() returns the index into BSFTable[] to look up the bitscan. Uses
   // Matt Taylor's folding for 32 bit case, extended to 64 bit by Kim Walisch.
@@ -259,7 +262,11 @@ namespace {
   // chessprogramming.wikispaces.com/Magic+Bitboards. In particular, here we
   // use the so called "fancy" approach.
 
+#ifndef USE_PEXT
   void init_magics(Bitboard table[], Magic magics[], Square deltas[]) {
+#else
+  void init_magics(uint16_t table[], Magic magics[], Square deltas[]) {
+#endif
 
     // Optimal PRNG seeds to pick the correct magics in the shortest time
     int seeds[][RANK_NB] = { { 8977, 44560, 54343, 38998,  5731, 95205, 104912, 17020 },

@@ -81,7 +81,7 @@ extern Bitboard PawnAttacks[COLOR_NB][SQUARE_NB];
 struct Magic {
   Bitboard  mask;
   Bitboard  magic;
-  Bitboard* attacks;
+  uint16_t* attacks;
 #ifndef USE_PEXT
   unsigned  shift;
 #else
@@ -94,12 +94,14 @@ struct Magic {
     if (HasPext)
         return unsigned(pext(occupied, mask));
 
+#ifndef USE_PEXT
     if (Is64Bit)
         return unsigned(((occupied & mask) * magic) >> shift);
 
     unsigned lo = unsigned(occupied) & unsigned(mask);
     unsigned hi = unsigned(occupied >> 32) & unsigned(mask >> 32);
     return (lo * unsigned(magic) ^ hi * unsigned(magic >> 32)) >> shift;
+#endif
   }
 };
 
