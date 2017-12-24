@@ -47,16 +47,16 @@ struct TTEntry {
     assert(d / ONE_PLY * ONE_PLY == d);
 
     // Preserve any existing move for the same position
-    if (m || (k >> 48) != key16)
+    if (m || (uint16_t)k != key16)
         move16 = (uint16_t)m;
 
     // Don't overwrite more valuable entries
-    if (  (k >> 48) != key16
+    if (  (uint16_t)k != key16
         || d / ONE_PLY > depth8 - 4
      /* || g != (genBound8 & 0xFC) // Matching non-zero keys are already refreshed by probe() */
         || b == BOUND_EXACT)
     {
-        key16     = (uint16_t)(k >> 48);
+        key16     = (uint16_t)k;
         value16   = (int16_t)v;
         eval16    = (int16_t)ev;
         genBound8 = (uint8_t)(g | b);
@@ -75,13 +75,11 @@ private:
   int8_t   depth8;
 };
 
-
-/// A TranspositionTable consists of a power of 2 number of clusters and each
-/// cluster consists of ClusterSize number of TTEntry. Each non-empty entry
-/// contains information of exactly one position. The size of a cluster should
-/// divide the size of a cache line size, to ensure that clusters never cross
-/// cache lines. This ensures best cache performance, as the cacheline is
-/// prefetched, as soon as possible.
+/// A transposition table consists of a number of clusters and each cluster
+/// consists of ClusterSize number of TTEntry. Each non-empty entry contains
+/// information about exactly one position. To ensure best cache performance,
+/// the size of a cluster should be a power of two and the transposition
+/// table should be aligned on clusters.
 
 class TranspositionTable {
 
@@ -93,7 +91,13 @@ class TranspositionTable {
     char padding[2]; // Align to a divisor of the cache line size
   };
 
-  static_assert(CacheLineSize % sizeof(Cluster) == 0, "Cluster size incorrect");
+  static const int ClusterLog = 5; // One cluster is 2^5 = 32 bytes.
+  static const int MBLog = 20 - ClusterLog;
+
+  static_assert(sizeof(Cluster) == 1 << ClusterLog, "Cluster size incorrect");
+
+  // We currently allow a maximum table size of 2^20 MB (= 1 TB).
+  static const int SizeLog = MBLog + 20;
 
 public:
  ~TranspositionTable() { free(mem); }
@@ -104,13 +108,16 @@ public:
   void resize(size_t mbSize);
   void clear();
 
-  // The 32 lowest order bits of the key are used to get the index of the cluster
+  static const uint64_t MaxSize = (uint64_t)sizeof(Cluster) << SizeLog;
+
+  // The 64-bit key value is scaled to get the cluster index. We give up
+  // some precision to keep the result of the multiplication within 64 bits.
   TTEntry* first_entry(const Key key) const {
-    return &table[(uint32_t(key) * uint64_t(clusterCount)) >> 32].entry[0];
+    return &table[((key >> (SizeLog - MBLog)) * mbSize) >> (64 - SizeLog)].entry[0];
   }
 
 private:
-  size_t clusterCount;
+  uint64_t mbSize; // TT size in megabytes
   Cluster* table;
   void* mem;
   uint8_t generation8; // Size must be not bigger than TTEntry::genBound8
