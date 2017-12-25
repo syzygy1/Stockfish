@@ -24,6 +24,10 @@
 #include "misc.h"
 #include "types.h"
 
+#ifdef IS_64BIT
+typedef unsigned __int128 uint128_t;
+#endif
+
 /// TTEntry struct is the 10 bytes transposition table entry, defined as below:
 ///
 /// key        16 bit
@@ -47,16 +51,16 @@ struct TTEntry {
     assert(d / ONE_PLY * ONE_PLY == d);
 
     // Preserve any existing move for the same position
-    if (m || (k >> 48) != key16)
+    if (m || (uint16_t)k != key16)
         move16 = (uint16_t)m;
 
     // Don't overwrite more valuable entries
-    if (  (k >> 48) != key16
+    if (  (uint16_t)k != key16
         || d / ONE_PLY > depth8 - 4
      /* || g != (genBound8 & 0xFC) // Matching non-zero keys are already refreshed by probe() */
         || b == BOUND_EXACT)
     {
-        key16     = (uint16_t)(k >> 48);
+        key16     = (uint16_t)k;
         value16   = (int16_t)v;
         eval16    = (int16_t)ev;
         genBound8 = (uint8_t)(g | b);
@@ -106,7 +110,11 @@ public:
 
   // The 32 lowest order bits of the key are used to get the index of the cluster
   TTEntry* first_entry(const Key key) const {
-    return &table[(uint32_t(key) * uint64_t(clusterCount)) >> 32].entry[0];
+#ifdef IS_64BIT
+    return &table[(key * uint128_t(clusterCount)) >> 64].entry[0];
+#else
+    return &table[((key >> 32) * uint64_t(clusterCount)) >> 32].entry[0];
+#endif
   }
 
 private:
