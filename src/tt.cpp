@@ -28,20 +28,20 @@ TranspositionTable TT; // Our global transposition table
 
 
 /// TranspositionTable::resize() sets the size of the transposition table,
-/// measured in megabytes. Transposition table consists of a power of 2 number
-/// of clusters and each cluster consists of ClusterSize number of TTEntry.
+/// measured in megabytes. The transposition table consists of a large
+/// number of clusters and should be aligned on clusters for best cache
+/// performance.
 
 void TranspositionTable::resize(size_t mbSize) {
 
-  size_t newClusterCount = mbSize * 1024 * 1024 / sizeof(Cluster);
-
-  if (newClusterCount == clusterCount)
+  size_t newUnitCount = (mbSize << 20) >> (ClusterLog + UnitLog);
+  if (newUnitCount == unitCount)
       return;
 
-  clusterCount = newClusterCount;
+  unitCount = newUnitCount;
 
   free(mem);
-  mem = calloc(clusterCount * sizeof(Cluster) + CacheLineSize - 1, 1);
+  mem = calloc((unitCount << (UnitLog + ClusterLog)) + sizeof(Cluster) - 1, 1);
 
   if (!mem)
   {
@@ -50,7 +50,7 @@ void TranspositionTable::resize(size_t mbSize) {
       exit(EXIT_FAILURE);
   }
 
-  table = (Cluster*)((uintptr_t(mem) + CacheLineSize - 1) & ~(CacheLineSize - 1));
+  table = (Cluster*)((uintptr_t(mem) + sizeof(Cluster) - 1) & ~(sizeof(Cluster) - 1));
 }
 
 
@@ -60,7 +60,7 @@ void TranspositionTable::resize(size_t mbSize) {
 
 void TranspositionTable::clear() {
 
-  std::memset(table, 0, clusterCount * sizeof(Cluster));
+  std::memset(table, 0, unitCount << (UnitLog + ClusterLog));
 }
 
 
@@ -74,7 +74,7 @@ void TranspositionTable::clear() {
 TTEntry* TranspositionTable::probe(const Key key, bool& found) const {
 
   TTEntry* const tte = first_entry(key);
-  const uint16_t key16 = key >> 48;  // Use the high 16 bits as key inside the cluster
+  const uint16_t key16 = key;  // Use the low 16 bits as key inside the cluster
 
   for (int i = 0; i < ClusterSize; ++i)
       if (!tte[i].key16 || tte[i].key16 == key16)
