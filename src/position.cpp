@@ -128,16 +128,20 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
 /// Position::init() initializes at startup the various arrays used to compute
 /// hash keys.
 
+static Key shuffle(Key key) {
+  return (key << 32) | ((key >> 16) & 0xffff0000) | (key >> 48);
+}
+
 void Position::init() {
 
   PRNG rng(1070372);
 
   for (Piece pc : Pieces)
       for (Square s = SQ_A1; s <= SQ_H8; ++s)
-          Zobrist::psq[pc][s] = rng.rand<Key>();
+          Zobrist::psq[pc][s] = shuffle(rng.rand<Key>());
 
   for (File f = FILE_A; f <= FILE_H; ++f)
-      Zobrist::enpassant[f] = rng.rand<Key>();
+      Zobrist::enpassant[f] = shuffle(rng.rand<Key>());
 
   for (int cr = NO_CASTLING; cr <= ANY_CASTLING; ++cr)
   {
@@ -146,12 +150,12 @@ void Position::init() {
       while (b)
       {
           Key k = Zobrist::castling[1ULL << pop_lsb(&b)];
-          Zobrist::castling[cr] ^= k ? k : rng.rand<Key>();
+          Zobrist::castling[cr] ^= k ? k : shuffle(rng.rand<Key>());
       }
   }
 
-  Zobrist::side = rng.rand<Key>();
-  Zobrist::noPawns = rng.rand<Key>();
+  Zobrist::side = shuffle(rng.rand<Key>());
+  Zobrist::noPawns = shuffle(rng.rand<Key>());
 }
 
 
