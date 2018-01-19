@@ -505,6 +505,7 @@ namespace {
     bool captureOrPromotion, doFullDepthSearch, moveCountPruning, skipQuiets, ttCapture, pvExact;
     Piece movedPiece;
     int moveCount, captureCount, quietCount;
+    const int margin = PvNode ? 7 : 0;
 
     // Step 1. Initialize node
     Thread* thisThread = pos.this_thread();
@@ -959,9 +960,9 @@ moves_loop: // When in check search starts from here
 
           Depth d = std::max(newDepth - r, ONE_PLY);
 
-          value = -search<NonPV>(pos, ss+1, -(alpha+1), -alpha, d, true, false);
+          value = -search<NonPV>(pos, ss+1, -(alpha-margin+1), -alpha+margin, d, true, false);
 
-          doFullDepthSearch = (value > alpha && d != newDepth);
+          doFullDepthSearch = (value > alpha-margin && d != newDepth);
       }
       else
           doFullDepthSearch = !PvNode || moveCount > 1;
@@ -969,14 +970,14 @@ moves_loop: // When in check search starts from here
       // Step 16. Full depth search when LMR is skipped or fails high
       if (doFullDepthSearch)
           value = newDepth <   ONE_PLY ?
-                            givesCheck ? -qsearch<NonPV,  true>(pos, ss+1, -(alpha+1), -alpha)
-                                       : -qsearch<NonPV, false>(pos, ss+1, -(alpha+1), -alpha)
-                                       : - search<NonPV>(pos, ss+1, -(alpha+1), -alpha, newDepth, !cutNode, false);
+                            givesCheck ? -qsearch<NonPV,  true>(pos, ss+1, -(alpha-margin+1), -alpha+margin)
+                                       : -qsearch<NonPV, false>(pos, ss+1, -(alpha-margin+1), -alpha+margin)
+                                       : - search<NonPV>(pos, ss+1, -(alpha-margin+1), -alpha+margin, newDepth, !cutNode, false);
 
       // For PV nodes only, do a full PV search on the first move or after a fail
       // high (in the latter case search only if value < beta), otherwise let the
       // parent node fail low with value <= alpha and try another move.
-      if (PvNode && (moveCount == 1 || (value > alpha && (rootNode || value < beta))))
+      if (PvNode && (moveCount == 1 || (value > alpha-margin && (rootNode || value < beta))))
       {
           (ss+1)->pv = pv;
           (ss+1)->pv[0] = MOVE_NONE;
