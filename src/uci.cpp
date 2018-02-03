@@ -132,6 +132,8 @@ namespace {
         else if (token == "infinite")  limits.infinite = 1;
         else if (token == "ponder")    ponderMode = true;
 
+    limits.movetime = 100;
+
     Threads.start_thinking(pos, states, limits, ponderMode);
   }
 
