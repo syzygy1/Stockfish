@@ -348,6 +348,7 @@ void Thread::search() {
           // high/low anymore.
           while (true)
           {
+              skipFailHigh = true;
               bestValue = ::search<PV>(rootPos, ss, alpha, beta, rootDepth, false, false);
 
               // Bring the best move to the front. It is critical that sorting
@@ -385,7 +386,7 @@ void Thread::search() {
                       Threads.stopOnPonderhit = false;
                   }
               }
-              else if (bestValue >= beta)
+              else if (bestValue >= beta && !skipFailHigh)
                   beta = std::min(bestValue + delta, VALUE_INFINITE);
               else
                   break;
@@ -500,7 +501,7 @@ namespace {
     Move ttMove, move, excludedMove, bestMove;
     Depth extension, newDepth;
     Value bestValue, value, ttValue, eval, maxValue;
-    bool ttHit, inCheck, givesCheck, singularExtensionNode, improving;
+    bool ttHit, inCheck, givesCheck, singularExtensionNode, improving, failHigh;
     bool captureOrPromotion, doFullDepthSearch, moveCountPruning, skipQuiets, ttCapture, pvExact;
     Piece movedPiece;
     int moveCount, captureCount, quietCount;
@@ -512,6 +513,7 @@ namespace {
     ss->statScore = 0;
     bestValue = -VALUE_INFINITE;
     maxValue = VALUE_INFINITE;
+    if (rootNode) failHigh = false;
 
     // Check for the available remaining time
     if (thisThread == Threads.main())
@@ -762,6 +764,7 @@ namespace {
     // Step 10. Internal iterative deepening (skipped when in check)
     if (    depth >= 6 * ONE_PLY
         && !ttMove
+        && !rootNode
         && (PvNode || ss->staticEval + 256 >= beta))
     {
         Depth d = (3 * depth / (4 * ONE_PLY) - 2) * ONE_PLY;
@@ -988,10 +991,15 @@ moves_loop: // When in check search starts from here
                                        : -qsearch<NonPV, false>(pos, ss+1, -(alpha+1), -alpha)
                                        : - search<NonPV>(pos, ss+1, -(alpha+1), -alpha, newDepth, !cutNode, false);
 
+      if (rootNode && failHigh && value > alpha)
+      {
+          pos.this_thread()->skipFailHigh = false;
+      }
+
       // For PV nodes only, do a full PV search on the first move or after a fail
       // high (in the latter case search only if value < beta), otherwise let the
       // parent node fail low with value <= alpha and try another move.
-      if (PvNode && (moveCount == 1 || (value > alpha && (rootNode || value < beta))))
+      else if (PvNode && (moveCount == 1 || (value > alpha && (rootNode || value < beta))))
       {
           (ss+1)->pv = pv;
           (ss+1)->pv[0] = MOVE_NONE;
@@ -1020,8 +1028,14 @@ moves_loop: // When in check search starts from here
                                     thisThread->rootMoves.end(), move);
 
           // PV move or new best move ?
-          if (moveCount == 1 || value > alpha)
+          if (moveCount == 1 || (value > alpha && !failHigh))
           {
+              if (value >= beta)
+              {
+                  failHigh = true;
+                  alpha = value;
+                  beta = alpha + 1;
+              }
               rm.score = value;
               rm.selDepth = thisThread->selDepth;
               rm.pv.resize(1);
