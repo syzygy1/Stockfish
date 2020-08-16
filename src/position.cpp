@@ -702,6 +702,10 @@ void Position::do_move(Move m, StateInfo& newSt, bool givesCheck) {
   assert(is_ok(m));
   assert(&newSt != st);
 
+  // First update the accumulator for the current position if not yet done
+  if (Eval::useNNUE)
+    Eval::NNUE::update_eval(*this);
+
   thisThread->nodes.fetch_add(1, std::memory_order_relaxed);
   Key k = st->key ^ Zobrist::side;
 
@@ -1048,6 +1052,7 @@ void Position::do_null_move(StateInfo& newSt) {
 
   if (Eval::useNNUE)
   {
+      Eval::NNUE::update_eval(*this);
       std::memcpy(&newSt, st, sizeof(StateInfo));
       st->accumulator.computed_score = false;
   }
