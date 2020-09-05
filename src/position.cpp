@@ -1000,7 +1000,7 @@ void Position::do_null_move(StateInfo& newSt) {
   if (Eval::useNNUE)
   {
       std::memcpy(&newSt, st, sizeof(StateInfo));
-      st->accumulator.computed_score = false;
+      newSt.accumulator.computed_score = false;
   }
   else
       std::memcpy(&newSt, st, offsetof(StateInfo, accumulator));
