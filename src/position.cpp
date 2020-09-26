@@ -996,15 +996,13 @@ void Position::do_null_move(StateInfo& newSt) {
   assert(!checkers());
   assert(&newSt != st);
 
-  if (Eval::useNNUE)
-  {
-      std::memcpy(&newSt, st, sizeof(StateInfo));
-  }
-  else
-      std::memcpy(&newSt, st, offsetof(StateInfo, accumulator));
-
+  std::memcpy(&newSt, st, offsetof(StateInfo, accumulator));
   newSt.previous = st;
   st = &newSt;
+
+  // Used by NNUE
+  st->accumulator.computed_accumulation = false;
+  st->dirtyPiece.dirty_num = 0;
 
   if (st->epSquare != SQ_NONE)
   {

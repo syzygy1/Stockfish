@@ -119,26 +119,13 @@ namespace Eval::NNUE {
       return !stream.fail();
     }
 
-    // Proceed with the difference calculation if possible
-    bool UpdateAccumulatorIfPossible(const Position& pos) const {
-
-      const auto now = pos.state();
-      if (now->accumulator.computed_accumulation)
-        return true;
-
-      const auto prev = now->previous;
-      if (prev && prev->accumulator.computed_accumulation) {
-        UpdateAccumulator(pos);
-        return true;
-      }
-
-      return false;
-    }
-
     // Convert input features
     void Transform(const Position& pos, OutputType* output) const {
 
-      if (!UpdateAccumulatorIfPossible(pos))
+      const auto prev = pos.state()->previous;
+      if (prev && prev->accumulator.computed_accumulation)
+        UpdateAccumulator(pos);
+      else
         RefreshAccumulator(pos);
 
       const auto& accumulation = pos.state()->accumulator.accumulation;
@@ -293,7 +280,7 @@ namespace Eval::NNUE {
       auto& accumulator = pos.state()->accumulator;
       IndexType i = 0;
       Features::IndexList removed_indices[2], added_indices[2];
-      bool reset[2];
+      bool reset[2] = { false, false };
       RawFeatures::AppendChangedIndices(pos, kRefreshTriggers[i],
                                         removed_indices, added_indices, reset);
 

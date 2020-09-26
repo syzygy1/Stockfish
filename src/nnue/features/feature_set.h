@@ -65,7 +65,6 @@ namespace Eval::NNUE::Features {
       if (dp.dirty_num == 0) return;
 
       for (Color perspective : { WHITE, BLACK }) {
-        reset[perspective] = false;
         switch (trigger) {
           case TriggerEvent::kFriendKingMoved:
             reset[perspective] = dp.piece[0] == make_piece(perspective, KING);
