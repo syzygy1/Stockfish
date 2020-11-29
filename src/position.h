@@ -244,11 +244,11 @@ inline Bitboard Position::pieces(Color c, PieceType pt1, PieceType pt2) const {
 }
 
 template<PieceType Pt> inline int Position::count(Color c) const {
-  return Pt == ALL_PIECES ? popcount(pieces(c)) : pieceCount[make_piece(c, Pt)];
+  return pieceCount[make_piece(c, Pt)];
 }
 
 template<PieceType Pt> inline int Position::count() const {
-  return popcount(Pt == ALL_PIECES ? pieces() : pieces(Pt));
+  return count<Pt>(WHITE) + count<Pt>(BLACK);
 }
 
 template<PieceType Pt> inline Square Position::square(Color c) const {
@@ -388,6 +388,7 @@ inline void Position::put_piece(Piece pc, Square s) {
   byTypeBB[ALL_PIECES] |= byTypeBB[type_of(pc)] |= s;
   byColorBB[color_of(pc)] |= s;
   pieceCount[pc]++;
+  pieceCount[make_piece(color_of(pc), ALL_PIECES)]++;
   psq += PSQT::psq[pc][s];
 }
 
@@ -399,6 +400,7 @@ inline void Position::remove_piece(Square s) {
   byColorBB[color_of(pc)] ^= s;
   /* board[s] = NO_PIECE;  Not needed, overwritten by the capturing one */
   pieceCount[pc]--;
+  pieceCount[make_piece(color_of(pc), ALL_PIECES)]--;
   psq -= PSQT::psq[pc][s];
 }
 
