@@ -509,7 +509,7 @@ bool Position::legal(Move m) const {
   {
       Square ksq = square<KING>(us);
       Square capsq = to - pawn_push(us);
-      Bitboard occupied = (pieces() ^ from ^ capsq) | to;
+      Bitboard occupied = pieces() ^ from ^ capsq ^ to;
 
       assert(to == ep_square());
       assert(moved_piece(m) == make_piece(us, PAWN));
@@ -552,72 +552,91 @@ bool Position::legal(Move m) const {
 }
 
 
-/// Position::pseudo_legal() takes a random move and tests whether the move is
-/// pseudo legal. It is used to validate moves from TT that can be corrupted
-/// due to SMP concurrent access or hash position key aliasing.
+/// Position::pseudo_legal() takes a move and tests whether the move is
+/// pseudo legal. It is used to validate moves from the TT that can be
+/// corrupted due to SMP concurrent access or hash position key aliasing.
+/// We use the fact that the move 'm' is a legal move in some position.
 
 bool Position::pseudo_legal(const Move m) const {
 
   Color us = sideToMove;
   Square from = from_sq(m);
   Square to = to_sq(m);
-  Piece pc = moved_piece(m);
-
-  // Use a slower but simpler function for uncommon cases
-  if (type_of(m) != NORMAL)
-      return MoveList<LEGAL>(*this).contains(m);
-
-  // Is not a promotion, so promotion piece must be empty
-  if (promotion_type(m) - KNIGHT != NO_PIECE_TYPE)
-      return false;
 
   // If the 'from' square is not occupied by a piece belonging to the side to
   // move, the move is obviously not legal.
-  if (pc == NO_PIECE || color_of(pc) != us)
+  if (!(pieces(us) & from))
       return false;
 
-  // The destination square cannot be occupied by a friendly piece
+  // Handle castling moves
+  if (type_of(m) == CASTLING)
+  {
+      if (checkers())
+          return false;
+
+      // If castling right exists, king and rook are in the right place
+      CastlingRights cr = us & (from < to ? KING_SIDE : QUEEN_SIDE);
+      return can_castle(cr) && !castling_impeded(cr);
+  }
+
+  // The destination square may not be occupied by a friendly piece
   if (pieces(us) & to)
       return false;
 
-  // Handle the special case of a pawn move
-  if (type_of(pc) == PAWN)
+  PieceType pt = type_of(piece_on(from));
+  if (pt != PAWN)
   {
-      // We have already handled promotion moves, so destination
-      // cannot be on the 8th/1st rank.
-      if ((Rank8BB | Rank1BB) & to)
+      // The remaining special moves are pawn moves
+      if (type_of(m) != NORMAL)
           return false;
 
-      if (   !(pawn_attacks_bb(us, from) & pieces(~us) & to) // Not a capture
-          && !((from + pawn_push(us) == to) && empty(to))       // Not a single push
-          && !(   (from + 2 * pawn_push(us) == to)              // Not a double push
-               && (relative_rank(us, from) == RANK_2)
-               && empty(to)
-               && empty(to - pawn_push(us))))
+      // The to square must be within range
+      if (!(attacks_bb(pt, from, pieces()) & to))
           return false;
-  }
-  else if (!(attacks_bb(type_of(pc), from, pieces()) & to))
-      return false;
 
-  // Evasions generator already takes care to avoid some kind of illegal moves
-  // and legal() relies on this. We therefore have to take care that the same
-  // kind of moves are filtered out here.
-  if (checkers())
-  {
-      if (type_of(pc) != KING)
-      {
-          // Double check? In this case a king move is required
-          if (more_than_one(checkers()))
-              return false;
-
-          // Our move must be a blocking evasion or a capture of the checking piece
-          if (!((between_bb(lsb(checkers()), square<KING>(us)) | checkers()) & to))
-              return false;
-      }
       // In case of king moves under check we have to remove king so as to catch
       // invalid moves like b1a1 when opposite queen is on c1.
-      else if (attackers_to(to, pieces() ^ from) & pieces(~us))
+      if (pt == KING)
+          return   !checkers()
+                || !(attackers_to(to, pieces() ^ from) & pieces(~us));
+  }
+  else
+  {
+      // Handle pawn moves
+      if (type_of(m) == NORMAL) {
+          // The 'to' square cannot be on the 8th/1st rank.
+          if ((Rank8BB | Rank1BB) & to)
+              return false;
+
+          if (   !(pawn_attacks_bb(us, from) & pieces(~us) & to) // Not a capture
+              && !((from + pawn_push(us) == to) && empty(to))    // Not a single push
+              && !(   from + 2 * pawn_push(us) == to             // Not a double push
+                   && relative_rank(us, from) == RANK_2
+                   && empty(to)
+                   && empty(to - pawn_push(us))))
+              return false;
+      }
+      else if (type_of(m) == PROMOTION)
+      {
+          // No need to test for pawn to 8th/1st rank.
+          if (   !(pawn_attacks_bb(us, from) & pieces(~us) & to)
+              && !(from + pawn_push(us) == to && empty(to)))
+              return false;
+      }
+      else
+          return to == ep_square() && (pawn_attacks_bb(us, from) & to);
+  }
+
+  // Our evasions generator already avoids certain illegal moves, and legal()
+  // relies on this. We therefore have to filter out the same moves here.
+  if (checkers())
+  {
+      // Double check? In this case a king move is required
+      if (more_than_one(checkers()))
           return false;
+
+      // Our move must be a blocking evasion or a capture of the checking piece
+      return (between_bb(lsb(checkers()), square<KING>(us)) | checkers()) & to;
   }
 
   return true;
@@ -658,20 +677,18 @@ bool Position::gives_check(Move m) const {
   case ENPASSANT:
   {
       Square capsq = make_square(file_of(to), rank_of(from));
-      Bitboard b = (pieces() ^ from ^ capsq) | to;
+      Bitboard b = pieces() ^ from ^ capsq ^ to;
 
       return  (attacks_bb<  ROOK>(square<KING>(~sideToMove), b) & pieces(sideToMove, QUEEN, ROOK))
             | (attacks_bb<BISHOP>(square<KING>(~sideToMove), b) & pieces(sideToMove, QUEEN, BISHOP));
   }
   case CASTLING:
   {
-      Square kfrom = from;
-      Square rfrom = to; // Castling is encoded as 'king captures the rook'
-      Square kto = relative_square(sideToMove, rfrom > kfrom ? SQ_G1 : SQ_C1);
-      Square rto = relative_square(sideToMove, rfrom > kfrom ? SQ_F1 : SQ_D1);
+      // Castling is encoded as 'king captures the rook'
+      Square rto = relative_square(sideToMove, to > from ? SQ_F1 : SQ_D1);
 
       return   (attacks_bb<ROOK>(rto) & square<KING>(~sideToMove))
-            && (attacks_bb<ROOK>(rto, (pieces() ^ kfrom ^ rfrom) | rto | kto) & square<KING>(~sideToMove));
+            && (attacks_bb<ROOK>(rto, (pieces() ^ from)) & square<KING>(~sideToMove));
   }
   default:
       assert(false);
