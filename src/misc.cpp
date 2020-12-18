@@ -36,6 +36,7 @@ typedef bool(*fun1_t)(LOGICAL_PROCESSOR_RELATIONSHIP,
                       PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, PDWORD);
 typedef bool(*fun2_t)(USHORT, PGROUP_AFFINITY);
 typedef bool(*fun3_t)(HANDLE, CONST GROUP_AFFINITY*, PGROUP_AFFINITY);
+typedef size_t(*fun4_t)(void);
 }
 #endif
 
@@ -367,7 +368,13 @@ static void* aligned_large_pages_alloc_win(size_t allocSize) {
   LUID luid { };
   void* mem = nullptr;
 
-  const size_t largePageSize = GetLargePageMinimum();
+  // Early exit if the needed API is not available at runtime
+  HMODULE k32 = GetModuleHandle("Kernel32.dll");
+  auto fun4 = (fun4_t)(void(*)())GetProcAddress(k32, "GetLargePageMinimum");
+  if (!fun4)
+      return nullptr;
+
+  const size_t largePageSize = fun4();
   if (!largePageSize)
       return nullptr;
 
