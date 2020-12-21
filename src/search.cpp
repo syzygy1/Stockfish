@@ -1485,7 +1485,7 @@ moves_loop: // When in check, search starts from here
     if (ss->inCheck)
     {
         ss->staticEval = VALUE_NONE;
-        bestValue = futilityBase = -VALUE_INFINITE;
+        bestValue = std::max(alpha, mated_in(ss->ply));
     }
     else
     {
@@ -1520,9 +1520,8 @@ moves_loop: // When in check, search starts from here
 
         if (PvNode && bestValue > alpha)
             alpha = bestValue;
-
-        futilityBase = bestValue + 155;
     }
+    futilityBase = bestValue + 155;
 
     const PieceToHistory* contHist[] = { (ss-1)->continuationHistory, (ss-2)->continuationHistory,
                                           nullptr                   , (ss-4)->continuationHistory,
@@ -1548,8 +1547,7 @@ moves_loop: // When in check, search starts from here
       moveCount++;
 
       // Futility pruning
-      if (    bestValue > VALUE_TB_LOSS_IN_MAX_PLY
-          && !givesCheck
+      if (   !givesCheck
           &&  futilityBase > -VALUE_KNOWN_WIN
           && !pos.advanced_pawn_push(move))
       {
@@ -1627,15 +1625,6 @@ moves_loop: // When in check, search starts from here
                   break; // Fail high
           }
        }
-    }
-
-    // All legal moves have been searched. A special case: if we're in check
-    // and no legal moves were found, it is checkmate.
-    if (ss->inCheck && bestValue == -VALUE_INFINITE)
-    {
-        assert(!MoveList<LEGAL>(pos).size());
-
-        return mated_in(ss->ply); // Plies to mate from the root
     }
 
     // Save gathered info in transposition table
