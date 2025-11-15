@@ -839,6 +839,7 @@ Value Search::Worker::search(
     improving         = ss->staticEval > (ss - 2)->staticEval;
     opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
 
+#if 0
     // Hindsight adjustment of reductions based on static evaluation difference.
     if (priorReduction >= 3 && !opponentWorsening)
         depth++;
@@ -902,9 +903,11 @@ Value Search::Worker::search(
                 return nullValue;
         }
     }
+#endif
 
     improving |= ss->staticEval >= beta;
 
+#if 0
     // Step 10. Internal iterative reductions
     // At sufficient depth, reduce depth for PV/Cut nodes without a TTMove.
     // (*Scaler) Making IIR more aggressive scales poorly.
@@ -958,14 +961,17 @@ Value Search::Worker::search(
             }
         }
     }
+#endif
 
 moves_loop:  // When in check, search starts here
 
+#if 0
     // Step 12. A small Probcut idea
     probCutBeta = beta + 418;
     if ((ttData.bound & BOUND_LOWER) && ttData.depth >= depth - 4 && ttData.value >= probCutBeta
         && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
         return probCutBeta;
+#endif
 
     const PieceToHistory* contHist[] = {
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
@@ -1016,6 +1022,7 @@ moves_loop:  // When in check, search starts here
         // Calculate new depth for this move
         newDepth = depth - 1;
 
+#if 0
         int delta = beta - alpha;
 
         Depth r = reduction(improving, depth, moveCount, delta);
@@ -1094,6 +1101,7 @@ moves_loop:  // When in check, search starts here
                     continue;
             }
         }
+#endif
 
         // Step 15. Extensions
         // Singular extension search. If all moves but one
@@ -1130,7 +1138,7 @@ moves_loop:  // When in check, search starts here
 
                 depth++;
             }
-
+#if 0
             // Multi-cut pruning
             // Our ttMove is assumed to fail high based on the bound of the TT entry,
             // and if after excluding the ttMove with a reduced search we fail high
@@ -1158,6 +1166,7 @@ moves_loop:  // When in check, search starts here
             // over current beta
             else if (cutNode)
                 extension = -2;
+#endif
         }
 
         // Step 16. Make the move
@@ -1167,6 +1176,7 @@ moves_loop:  // When in check, search starts here
         newDepth += extension;
         uint64_t nodeCount = rootNode ? uint64_t(nodes) : 0;
 
+#if 0
         // Decrease reduction for PvNodes (*Scaler)
         if (ss->ttPv)
             r -= 2618 + PvNode * 991 + (ttData.value > alpha) * 903
@@ -1239,7 +1249,8 @@ moves_loop:  // When in check, search starts here
         }
 
         // Step 18. Full-depth search when LMR is skipped
-        else if (!PvNode || moveCount > 1)
+        else
+        if (!PvNode || moveCount > 1)
         {
             // Increase reduction if ttMove is not present
             if (!ttData.move)
@@ -1249,6 +1260,11 @@ moves_loop:  // When in check, search starts here
             value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha,
                                    newDepth - (r > 3212) - (r > 4784 && newDepth > 2), !cutNode);
         }
+#else
+        if (!PvNode || moveCount > 1)
+            value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha,
+                                   newDepth, !cutNode);
+#endif
 
         // For PV nodes only, do a full PV search on the first move or after a fail high,
         // otherwise let the parent node fail low with value <= alpha and try another move.
