@@ -126,7 +126,7 @@ class Logger {
 //      Stockfish version
 std::string engine_version_info() {
     std::stringstream ss;
-    ss << "Stockfish " << version << std::setfill('0');
+    ss << "Cripplefish " << version << std::setfill('0');
 
     if constexpr (version == "dev")
     {
